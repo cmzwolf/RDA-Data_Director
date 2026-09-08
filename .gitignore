@@ -1,0 +1,27 @@
+# Credentials. Present from the first commit, deliberately.
+.env
+.env.*
+!.env.example
+*.token
+
+# Working and state directories
+/var/
+/state/
+/work/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Editors and OS
+.vscode/
+.idea/
+.DS_Store

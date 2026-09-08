@@ -1,0 +1,11 @@
+datadirector-contracts
+Copyright (c) 2026 Observatoire de Paris and contributors
+
+This package defines the interface contracts for implementations of the
+Research Data Alliance "Data Director Agentic AI Blueprint" v1.0 (August 2026).
+
+It is licensed under the Apache License, Version 2.0, deliberately and
+separately from the Data Director application, which is licensed under the
+European Union Public Licence v. 1.2. The permissive licence here exists so
+that third parties may write plugins against these interfaces under any licence
+of their choosing. See ADR-025 in the architecture document.

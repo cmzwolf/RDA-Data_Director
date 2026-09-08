@@ -1,0 +1,14 @@
+RESPONSIBILITY AND COMPLIANCE STATEMENT
+
+Dataset: Interview transcripts, maternal health practices study, 2024.
+Depositor: Faculty of Anthropology.
+
+The dataset contains transcripts of interviews with community health workers.
+Participants were recruited in small rural settlements and several hold roles
+held by only one person in their community, so identification remains possible
+from occupational and geographic detail even after names are removed.
+
+This material is sensitive. Ethics approval REC-2024-118 was granted by the
+University Research Ethics Committee. The legal basis for processing is informed
+consent. Third-party rights apply: participants retain rights over their
+testimony. An embargo applies until 2027-01-01. Applicable jurisdiction: France.

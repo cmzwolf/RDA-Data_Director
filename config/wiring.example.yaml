@@ -1,0 +1,29 @@
+# Wiring configuration. Owned by the system administrator; changes at deployment.
+# Contains no secret values: credential entries are environment variable NAMES.
+
+profile: single-user-local
+
+storage:
+  state_root: ./var/state
+  working_root: ./var/work
+  restricted_root: ./var/restricted
+  watched_folder: ./var/deposit
+
+backends:
+  - name: local-qwen
+    kind: ollama
+    endpoint: http://localhost:11434
+    residency: on-premise
+  - name: remote-claude
+    kind: anthropic
+    residency: extra-jurisdiction
+
+plugins:
+  - name: zenodo
+    enabled: true
+    settings:
+      base_url: https://sandbox.zenodo.org
+
+credential_env_vars:
+  zenodo:deposit: DD_ZENODO_TOKEN
+  anthropic:api: DD_ANTHROPIC_API_KEY

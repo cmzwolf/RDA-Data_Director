@@ -1,0 +1,21 @@
+# Policy configuration. Owned by the data steward or research office.
+# Auditable and version-controlled; changes when institutional policy changes.
+
+backend_by_sensitivity:
+  public:    [local-qwen, remote-claude]
+  internal:  [local-qwen]
+  sensitive: [local-qwen]
+
+# The only permitted value. Falling back to a less appropriate backend would be
+# a silent downgrade, so an unserviceable classification stops the workflow.
+on_no_permitted_backend: halt
+
+# Per-workflow oversight mode, which principle P4 requires be documented.
+oversight:
+  metadata_generation: human-in-the-loop
+  redaction_review: human-in-the-loop
+  post_deposit_monitoring: human-on-the-loop
+
+retention_days:
+  working_material: 30
+  restricted_justifications: 3650

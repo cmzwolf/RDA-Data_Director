@@ -1,0 +1,10 @@
+RESPONSIBILITY AND COMPLIANCE STATEMENT
+
+Dataset: Station 14 surface temperature series, 2019-2023.
+Depositor: Observatoire de Paris.
+
+The dataset contains instrument readings only. It contains no personal data and
+no information relating to identifiable individuals. There are no third-party
+rights over the material. No ethics approval was required.
+
+The data may be published openly under CC BY 4.0. Applicable jurisdiction: France.

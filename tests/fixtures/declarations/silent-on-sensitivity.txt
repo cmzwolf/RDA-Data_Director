@@ -1,0 +1,8 @@
+STATEMENT
+
+Dataset: Calibration measurements from the spectrograph bench, run 42.
+Depositor: Instrumentation group.
+
+The measurements were taken during scheduled maintenance in March 2026. The file
+format is CSV with one row per exposure. Contact the instrumentation group with
+questions about column definitions.

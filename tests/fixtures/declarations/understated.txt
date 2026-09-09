@@ -1,0 +1,10 @@
+RESPONSIBILITY AND COMPLIANCE STATEMENT
+
+Dataset: Clinic attendance log, rural health programme, 2024.
+Depositor: School of Public Health.
+
+This dataset is public and may be shared openly without restriction.
+
+Each row records a patient name, date of birth, village of residence, presenting
+condition, and the treating clinician. The programme operates in eleven
+settlements, several of which have a single resident health worker.

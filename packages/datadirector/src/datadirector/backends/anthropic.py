@@ -53,6 +53,11 @@ class AnthropicBackend:
             )
             r.raise_for_status()
             text = "".join(b.get("text", "") for b in r.json().get("content", []))
+        except httpx.ReadTimeout:
+            raise ExternalServiceError(
+                f"the Anthropic API did not respond within {self.timeout:.0f}s; "
+                "raise timeout_seconds for this backend in the wiring configuration"
+            ) from None
         except Exception as exc:
             # The message must not carry the credential; httpx exceptions carry
             # the request but not the headers' values in their str().

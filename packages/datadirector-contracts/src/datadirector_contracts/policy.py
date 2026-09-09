@@ -32,6 +32,11 @@ class BackendDeclaration(BaseModel):
     kind: str = Field(description="ollama | openai-compatible | anthropic | ...")
     endpoint: str | None = None
     residency: Residency
+    timeout_seconds: float = Field(
+        default=120.0,
+        description="Large local models exceed a two-minute default on ordinary "
+        "hardware; a 122B model on a short document can take longer still.",
+    )
 
 
 class PolicyConfig(BaseModel):
@@ -45,6 +50,14 @@ class PolicyConfig(BaseModel):
 
     backend_by_sensitivity: dict[SensitivityClass, list[str]]
     on_no_permitted_backend: NoBackendAction = NoBackendAction.HALT
+    infer_sensitivity_from_declaration: bool = Field(
+        default=True,
+        description="Whether the declaration agent may form its own view of "
+        "sensitivity from what a statement describes, in addition to "
+        "transcribing what it states. On by default because it is what a data "
+        "steward would do; an institution preferring a strict transcription "
+        "posture can disable it. An inference can only ever tighten (ADR-027).",
+    )
     oversight: dict[str, str] = Field(
         default_factory=dict,
         description="Workflow name -> 'human-in-the-loop' | 'human-on-the-loop' (P4).",

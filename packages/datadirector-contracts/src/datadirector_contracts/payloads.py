@@ -33,11 +33,32 @@ class DeclarationClaim(BaseModel):
 
     This is the input on which the whole confidentiality architecture depends.
     It is deliberately an assertion by an accountable human, not a detection.
+
+    Sensitivity is carried in two separate fields because they have different
+    epistemic status and conflating them discards signal (ADR-027):
+
+      - `stated_sensitivity` is what the document says. Transcribed, never
+        inferred. A document that does not use the words public, internal or
+        sensitive states nothing, and nothing is what belongs here.
+      - `inferred_sensitivity` is the agent's reading of what the document
+        *describes*. A statement listing dates of birth and home addresses
+        states no level while describing material any data steward would call
+        sensitive.
+
+    An inferred level may only ever tighten the outcome, never relax it, which
+    is the same asymmetry the classification scan obeys (Document A section 9.3).
     """
 
     model_config = ConfigDict(frozen=True)
 
-    asserted_sensitivity: SensitivityClass | None = None
+    stated_sensitivity: SensitivityClass | None = None
+    inferred_sensitivity: SensitivityClass | None = None
+    inference_indicators: list[str] = Field(
+        default_factory=list,
+        description="What in the document produced the inference, e.g. "
+        "'dates of birth', 'consent excludes publication'. Shown to the human "
+        "at the gate: an inference without its grounds is not reviewable.",
+    )
     ethics_approval_reference: str | None = None
     ethics_approval_body: str | None = None
     legal_basis: LegalBasis | None = None

@@ -10,6 +10,12 @@ backend_by_sensitivity:
 # a silent downgrade, so an unserviceable classification stops the workflow.
 on_no_permitted_backend: halt
 
+# Whether the declaration agent may form its own view of sensitivity from what a
+# statement describes, in addition to transcribing what it states. On by default
+# because it is what a data steward would do. An inference can only tighten the
+# outcome, never relax it (ADR-027). Set false for a strict transcription posture.
+infer_sensitivity_from_declaration: true
+
 # Per-workflow oversight mode, which principle P4 requires be documented.
 oversight:
   metadata_generation: human-in-the-loop

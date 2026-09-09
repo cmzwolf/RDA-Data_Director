@@ -68,7 +68,7 @@ def _proposed(channel: Channel) -> AssertionSet[DeclarationClaim]:
         channel=channel,
         state=AuthorityState.PROPOSED,
         assertions=[Assertion[DeclarationClaim](
-            payload=DeclarationClaim(asserted_sensitivity=SensitivityClass.PUBLIC),
+            payload=DeclarationClaim(stated_sensitivity=SensitivityClass.PUBLIC),
             confidence=0.9)],
     )
 

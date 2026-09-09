@@ -64,6 +64,13 @@ class OllamaBackend:
             )
             r.raise_for_status()
             text = r.json()["message"]["content"]
+        except httpx.ReadTimeout as exc:
+            raise ExternalServiceError(
+                f"Ollama did not respond within {self.timeout:.0f}s for model "
+                f"{self.model!r}. Large models routinely exceed this on ordinary "
+                "hardware: raise timeout_seconds for this backend in the wiring "
+                "configuration. The workflow pauses and can be resumed."
+            ) from exc
         except Exception as exc:
             raise ExternalServiceError(
                 f"Ollama call failed against {self.endpoint}: {exc}. "

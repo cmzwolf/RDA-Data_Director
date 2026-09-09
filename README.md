@@ -94,7 +94,8 @@ entries, decompression bombs and member-count exhaustion; structural profiling
 that reports column names, inferred types and character-class shapes but never
 values; watched-folder detection with write-stability checking; ingestion agent;
 declaration agent producing proposed claim sets that carry no authority until a
-human confirms them. 74 tests.
+human confirms them, reporting stated and inferred sensitivity separately with
+inference permitted only to tighten (ADR-027). 79 tests.
 
 A minimal CLI (`datadirector check | ingest | status | verify | provenance`)
 exists as scaffolding so the system can be exercised by hand. It is not the
@@ -123,8 +124,28 @@ backend.
 `DD_LIVE_TESTS=1`:
 
 ```bash
-DD_LIVE_TESTS=1 DD_OLLAMA_MODEL=qwen3.8:27b pytest tests/live -q -s
+DD_LIVE_TESTS=1 DD_OLLAMA_MODEL=qwen3.8:27b-mlx pytest tests/live -q -s
+
+# sweep every installed model, 20 repeats each
+python3 scripts/measure.py --repeats 20
+python3 scripts/summarise_measurements.py
 ```
+
+`DD_OLLAMA_MODEL` is required and has no default, so every measurement is
+attributable to a named model. Each run appends to
+`tests/results/measurements.jsonl`, and recorded model responses are filed per
+model under `tests/fixtures/model/<tag>/`. Neither is git-ignored: they are the
+evidence behind the figures.
+
+Large models exceed the 120-second default; set `timeout_seconds` for the
+backend in the wiring configuration, or `DD_OLLAMA_TIMEOUT` for the live suite,
+which defaults to 600 seconds.
+
+Injection is measured against three fixtures which test three different things,
+and the summariser explains which figure each one licenses. Note in particular
+that a directive announcing itself as a directive is refused by models that
+comply with the same demand phrased as a routine processing note, so the obvious
+fixture is a false-negative generator.
 
 Note what the injection test asserts and what it only measures. That an injected
 document yields a proposal carrying no authority is **asserted**, because it must

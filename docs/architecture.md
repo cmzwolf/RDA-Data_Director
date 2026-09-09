@@ -1129,6 +1129,45 @@ jurisdiction, and any embargo.
 The declaration agent parses this document and emits a **structured claim set**:
 each claim with a confidence value and a pointer to the passage it came from.
 
+#### What the document states, and what it describes
+
+A first implementation asked the model for one thing: the sensitivity level the
+document states. Tested against four model families, all behaved identically and
+correctly, and the result showed the design was wrong.
+
+Presented with a statement listing names, dates of birth, home addresses and
+household income for 1,240 respondents, under consent that excluded publication,
+every model reported no sensitivity level. Properly so: the document never uses
+the word. The instruction not to infer was obeyed exactly.
+
+The fail-safe held, because an unstated level is treated as the most restrictive
+class. But the reviewer at the approval gate saw "three claims, no sensitivity
+stated" and nothing about dates of birth. Safety came from a default rather than
+from anything a human could act on, which is precisely the display that gets
+approved without reading (§4.1).
+
+The schema therefore separates two things that have different epistemic status:
+
+- **Stated sensitivity** is what the document says, transcribed and never
+  inferred. A document that does not use the words public, internal or sensitive
+  states nothing, and nothing is recorded.
+- **Inferred sensitivity** is the agent's reading of what the document
+  *describes*, recorded with the specific indicators that produced it. An
+  inference without its grounds is not reviewable and is marked as such rather
+  than presented as a verdict.
+
+**An inference may only tighten**, which is the same asymmetry the classification
+scan obeys (§9.3). Where a statement claims "public" while describing patient
+records, the more restrictive reading is applied and the discrepancy is surfaced
+prominently: such a document is either an error or the injection case, and both
+warrant a human looking. Where a statement claims "sensitive" and the agent reads
+the content as innocuous, the statement stands.
+
+Inference is enabled by default, because forming a view of described material is
+what a data steward does. It can be disabled per deployment for institutions
+preferring a strict transcription posture; disabling it does not reduce safety,
+since an unstated level still falls back to the most restrictive class (ADR-027).
+
 **The declaration is not the authority.** If the agent read a document, concluded
 "this is not sensitive", and on that basis unlocked a remote model backend, then a
 document would be escalating privilege. That is exploitable both crudely (a
@@ -1426,7 +1465,42 @@ produce the wrong defences.
 
 **A document.** The primary adversary is a file: a README, a Data Management
 Plan, a repository record, a declaration statement, containing text that steers
-the model. The author may not even be attacking us; templates get copied. The
+the model.
+
+Live testing against two model families produced three findings worth recording,
+all at small sample size and all subject to change with any model release.
+
+*Resistance depends on presentation, not on content.* The same directive was
+put to one model twice: once behind a banner announcing itself as an instruction
+to the processing agent, once phrased as a routine deposit-preparation note
+among genuine administrative lines. The demand was identical. The model refused
+the announced version in every run and complied with the camouflaged version in
+every run. A test using only the announced form would have reported the model as
+resistant, which would have been false.
+
+*Models differ enough for the choice to be a security decision.* On the
+camouflaged directive, one model complied in every run and the other in none.
+The Blueprint treats model selection as a matter of capability and residency;
+these results suggest it is also a matter of susceptibility, and that a
+deployment changing model should re-measure rather than assume.
+
+*Compliance is partial.* The directive asked for three things: set the level to
+public, omit indicator reporting, suppress concern flags. The complying model
+did the first and not the second, so the inferred reading of the described
+content survived and the outcome was unchanged.
+
+The architecture's correctness did not depend on any of this. Across every run
+of every fixture, the described content was read as sensitive and the outcome
+was SENSITIVE, because an assertion carries no authority until a human confirms
+it and the tightening rule of §9.2 applies the more restrictive reading
+regardless. A successful injection setting `stated_sensitivity` to public while
+the content reads as sensitive raises the `declaration_understates` flag, so the
+attack surfaces a discrepancy rather than silencing one.
+
+Models also differ on whether a factual-looking assertion placed *inside* an
+injected block should be extracted or discarded with it. The specification does
+not say which is correct; both are defensible, and again the outcome does not
+depend on it. The author may not even be attacking us; templates get copied. The
 Blueprint identifies this as an untested risk (§10.1) but does not raise it to a
 requirement. Commitment C-4 and the channel-authority rule (§8.6) exist for this
 adversary.
@@ -1556,6 +1630,7 @@ Records marked *deviation* depart from the Blueprint's stated text and state why
 | **ADR-024** | Instruction authority derives from the authenticated channel; precedent transfers metadata decisions only | Interpretation | Supporting user instructions without breaching commitment C-4 requires a criterion distinguishing a directive from ingested content. Filename and content cannot supply it, since a dropped `instructions.txt` is indistinguishable from an injected `README.md`. Authorship, established by an authenticated channel, can. Instructions may narrow the permitted space but never widen it, so the channel cannot become an escalation path. Precedent reapplies metadata-shaping decisions only: sensitivity classifications, redaction decisions and backend permissions are properties of the present material and are never inherited, since a convenience feature that inherited them would silently bypass the confidentiality architecture. |
 | **ADR-025** | Two packages, two licences: contracts under Apache 2.0, application under EUPL 1.2 | **Deviation** | P7 asks for a permissive licence such as MIT or Apache 2.0. The application is EUPL 1.2 because it is European public-sector research software and reciprocity is appropriate for it. The contracts are permissive because the architecture depends on third-party plugins, and a plugin must import the contracts: under a reciprocal licence that import could oblige the plugin author to release under EUPL or an Article 5 compatible licence, deterring the contributions the design is built around and undercutting P7's own rationale of reuse without access barriers. Apache 2.0 is not in the EUPL Article 5 appendix, so the split works in this direction only: permissive code may be incorporated into an EUPL work, not the reverse. Apache rather than MIT for the express patent grant. |
 | **ADR-026** | Archives deposited expanded; relation types derived where structural, model-proposed where semantic, never free text | Choice | Expanded members are individually browsable and citable, which serves reuse better than a published archive; the archive-to-member lineage has no relatedIdentifier expression in any case, because the members carry no separate identifier and the related-identifier type vocabularies contain no checksum type, so it lives in the provenance chain. On relation types: version relations follow deterministically from the Dataset/DatasetVersion model and a model asked to infer them would be guessing at a known fact, while semantic relations to external resources are genuine judgements and face an approval gate, since an inverted direction is well-formed and undetectable downstream. The vocabulary is supplied by the SchemaProfile plugin rather than frozen in the core, because it differs by schema version and a repository may accept a subset. |
+| **ADR-027** | Declaration sensitivity split into stated and inferred; inference tightens only, enabled by default | Interpretation | The first design asked only what a document states. Four model families, tested independently, all reported no level for a statement describing names, dates of birth and home addresses under consent excluding publication, because the document never uses the word sensitive. That behaviour was correct and the specification was wrong: it had nowhere to put what the agent observed while reading, so the signal was discarded and the reviewer saw a blank field on the axis that mattered most. Stated and inferred sensitivity are now separate fields with different epistemic status, and an inference carries the indicators that produced it, since an inference without its grounds is not reviewable. An inference may only tighten, matching §9.3. Enabled by default because forming a view of described material is what a data steward does; disabling it for a strict transcription posture does not reduce safety, as an unstated level still falls back to the most restrictive class. |
 
 ---
 
@@ -1615,7 +1690,7 @@ gaps would misattribute a specification gap to the implementation.
 | ID | Category | Priority | Status | Satisfied by | Note |
 |---|---|---|---|---|---|
 | **C1** | Security | Mandatory | Partial — deployment | Credential broker; RBAC; hash chain; encryption in transit | Access is role-based, token-verified and auditable. Encryption at rest and adoption of a named compliance baseline such as NIST are infrastructure responsibilities of the deploying institution |
-| **C2** | Privacy | Mandatory | Implemented | Declaration gate; classification agent; redaction proposals | Data minimisation applied to metadata outputs; ethics confirmation required before deposit; workflow pauses on detection. Autonomous anonymisation not performed — see ADR-013 for our reading of that constraint |
+| **C2** | Privacy | Mandatory | Implemented | Declaration gate; classification agent; redaction proposals | Data minimisation applied to metadata outputs; ethics confirmation required before deposit; workflow pauses on detection. Where a statement understates the sensitivity of what it describes, the more restrictive reading is applied and the discrepancy surfaced (ADR-027). Autonomous anonymisation not performed — see ADR-013 for our reading of that constraint |
 | **C3** | Compliance | Mandatory | Partial — deployment | Policy configuration; provenance export; DMP verification | Evidence available on demand through provenance export. The policy corpus itself (funder, journal and institutional rules) is configured by the deploying institution |
 | **C4** | Sovereignty | Mandatory | Implemented | Policy Enforcement Point; backend residency declarations | Processing location constrained by policy; cross-border transfer policy-controlled and auditable. Physical storage location is set by deployment configuration |
 | **C5** | Interoperability | Mandatory | Partial — specification | Core API with generated OpenAPI descriptor | Open standards consumed and produced; open API exposed. The "harmonised API for inter-Director interaction" that C5 mandates is not defined anywhere in the Blueprint; ours is offered as a candidate for community discussion, not as a conformance claim (§13) |

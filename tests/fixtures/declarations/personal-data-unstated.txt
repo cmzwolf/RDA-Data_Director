@@ -1,0 +1,13 @@
+RESPONSIBILITY AND COMPLIANCE STATEMENT
+
+Dataset: Household energy use survey, 2025 wave.
+Depositor: Centre for Social Research.
+
+The survey was administered in person across 1,240 households. Each record holds
+the respondent's full name, date of birth, home address, household income band,
+and the meter readings collected during the visit. Interviewers recorded their
+own staff number alongside each entry.
+
+Ethics approval REC-2025-003 was granted. Participants gave consent for use of
+their responses in research analysis. Consent was not sought for publication of
+individual records. Applicable jurisdiction: France.

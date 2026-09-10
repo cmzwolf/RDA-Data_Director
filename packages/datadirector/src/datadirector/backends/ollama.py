@@ -8,24 +8,38 @@ from __future__ import annotations
 
 import httpx
 from datadirector_contracts import (
-    CapabilityManifest, Digest, ModelRequest, ModelResponse, Residency,
+    CapabilityManifest, Digest, ModelCapability, ModelRequest, ModelResponse,
+    Residency,
 )
 
 from ..errors import ConfigurationError, ExternalServiceError
-from .base import build_messages, manifest_for
+from .base import build_messages, capabilities_from_config, manifest_for
 
 
 class OllamaBackend:
     """Model tags are opaque strings; this module never parses their shape."""
 
-    def __init__(self, name: str, endpoint: str, model: str, timeout: float = 120.0) -> None:
+    def __init__(self, name: str, endpoint: str, model: str, timeout: float = 120.0,
+                 capabilities: set[ModelCapability] | None = None,
+                 declared: list[str] | None = None) -> None:
         self.name = name
         self.endpoint = endpoint.rstrip("/")
         self.model = model
         self.timeout = timeout
+        self._capabilities = capabilities or capabilities_from_config(declared)
 
     def manifest(self) -> CapabilityManifest:
-        return manifest_for(self.name, self.model, Residency.ON_PREMISE, offline=True)
+        return manifest_for(self.name, self.model, Residency.ON_PREMISE,
+                            offline=True, capabilities=self._capabilities)
+
+    def capabilities(self) -> set[ModelCapability]:
+        """What this backend can do.
+
+        Vision is configured explicitly rather than assumed: whether a local tag
+        accepts images depends on the model, and assuming it broadly would let
+        the PEP select a backend that then fails mid-workflow.
+        """
+        return set(self._capabilities)
 
     def residency(self) -> Residency:
         return Residency.ON_PREMISE
@@ -55,10 +69,20 @@ class OllamaBackend:
 
     def complete(self, request: ModelRequest) -> ModelResponse:
         messages = build_messages(request)
+        if request.images and ModelCapability.VISION not in self._capabilities:
+            raise ConfigurationError(
+                f"backend {self.name!r} was sent images but does not declare the "
+                "vision capability. Add `capabilities: [vision]` to its wiring "
+                "entry, or the policy layer will keep routing images elsewhere."
+            )
+        # Ollama takes base64 image strings on the message itself; the media type
+        # is inferred from the data, so the parallel list is dropped here.
+        wire = [{k: v for k, v in m.items() if k != "image_media_types"}
+                for m in messages]
         try:
             r = httpx.post(
                 f"{self.endpoint}/api/chat",
-                json={"model": self.model, "messages": messages, "stream": False,
+                json={"model": self.model, "messages": wire, "stream": False,
                       "options": {"num_predict": request.max_tokens}},
                 timeout=self.timeout,
             )

@@ -14,12 +14,25 @@ backends:
     kind: ollama
     endpoint: http://localhost:11434
     residency: on-premise
+    # Declared, not probed: a backend selected for a capability it lacks fails
+    # mid-workflow. Remove `vision` if the model or runtime cannot accept images.
+    capabilities: [text-generation, structured-output, vision]
     # Large local models exceed the 120s default. A 122B model on a short
     # document can take several minutes on ordinary hardware.
     timeout_seconds: 600
   - name: remote-claude
     kind: anthropic
     residency: extra-jurisdiction
+    capabilities: [text-generation, structured-output, vision, long-context]
+
+# Content inspection. Chunk size belongs to the deployment: a model with a 128k
+# context and one with 8k should not be fed identically. Overlap only handles a
+# disclosure straddling a boundary; the correlation pass is what finds one whose
+# halves are far apart.
+content:
+  chunk_chars: 6000
+  chunk_overlap: 600
+  max_chunks: 40
 
 plugins:
   - name: zenodo

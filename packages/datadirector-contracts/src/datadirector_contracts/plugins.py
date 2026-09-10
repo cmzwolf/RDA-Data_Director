@@ -13,11 +13,28 @@ Correction to an earlier count: there are eight protocols, not nine.
 
 from __future__ import annotations
 
+from enum import StrEnum
 from typing import Any, Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from .primitives import ArtefactRef, Digest, Orcid, Residency
+
+
+class ModelCapability(StrEnum):
+    """What a model backend can do, as distinct from what policy permits it to do.
+
+    Declared in the manifest rather than inferred, so a deployment can be audited
+    for whether it is able to inspect the material it holds. A deposit containing
+    images at a classification whose permitted backends are all text-only is not
+    a runtime surprise; it is a fact about the configuration, knowable at startup.
+    """
+
+    TEXT_GENERATION = "text-generation"
+    VISION = "vision"
+    AUDIO = "audio"
+    LONG_CONTEXT = "long-context"
+    STRUCTURED_OUTPUT = "structured-output"
 
 
 class CapabilityManifest(BaseModel):
@@ -41,6 +58,10 @@ class CapabilityManifest(BaseModel):
     offline_capable: bool = False
     residency: Residency | None = None
     requires_network: bool = True
+    model_capabilities: list[ModelCapability] = Field(
+        default_factory=list,
+        description="For ModelBackend plugins only. Empty for every other protocol.",
+    )
 
 
 @runtime_checkable
@@ -133,6 +154,25 @@ class ValidatorDriver(Plugin, Protocol):
     def validate(self, record: dict[str, Any], *, schema_id: str) -> list[ValidationFinding]: ...
 
 
+class ImageAttachment(BaseModel):
+    """An image sent to a multimodal backend.
+
+    Attached to the *user* turn and never to the system turn, for the same
+    reason ingested text is: an image is untrusted content. Text rendered in an
+    image — a whiteboard, a scanned memo, a caption — is instruction-shaped
+    material that a vision model reads, and visual prompt injection is the
+    direct analogue of the textual case (commitment C-4). Keeping images in the
+    user position is what stops a photograph from issuing directives.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    media_type: str = Field(description="image/jpeg, image/png, ...")
+    data_base64: str
+    label: str | None = Field(
+        default=None, description="Artefact name, for the record. Never content.")
+
+
 class ModelRequest(BaseModel):
     """A request to a model backend.
 
@@ -150,6 +190,11 @@ class ModelRequest(BaseModel):
         description="Instructions from an authenticated channel (ADR-024). Kept "
         "separate from user_content so that ingested material and directives are "
         "never concatenated into one undifferentiated prompt.",
+    )
+    images: list[ImageAttachment] = Field(
+        default_factory=list,
+        description="Requires a backend declaring the vision capability. Always "
+        "user-turn content, never instruction.",
     )
     max_tokens: int = 4096
 
@@ -169,6 +214,10 @@ class ModelBackend(Plugin, Protocol):
     """One model endpoint. Reached only through the PEP."""
 
     def residency(self) -> Residency: ...
+
+    def capabilities(self) -> set[ModelCapability]:
+        """What this backend can do. Never what it is permitted to do."""
+        ...
 
     def complete(self, request: ModelRequest) -> ModelResponse: ...
 

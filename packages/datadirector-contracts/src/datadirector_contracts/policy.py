@@ -17,7 +17,7 @@ from .primitives import Residency  # re-exported for callers of this module
 from .sensitivity import SensitivityClass
 
 if TYPE_CHECKING:  # avoids a cycle: plugins imports policy for Residency
-    from .plugins import ModelBackend
+    from .plugins import ModelBackend, ModelCapability
 
 
 class NoBackendAction(StrEnum):
@@ -32,6 +32,13 @@ class BackendDeclaration(BaseModel):
     kind: str = Field(description="ollama | openai-compatible | anthropic | ...")
     endpoint: str | None = None
     residency: Residency
+    capabilities: list[str] = Field(
+        default_factory=list,
+        description="Capability names this backend provides, e.g. ['vision']. "
+        "Empty means text-generation and structured-output only. Declared rather "
+        "than probed: a backend selected for a capability it lacks fails "
+        "mid-workflow, which is the failure C7 forbids.",
+    )
     timeout_seconds: float = Field(
         default=120.0,
         description="Large local models exceed a two-minute default on ordinary "
@@ -82,6 +89,16 @@ class PolicyHalt(Exception):
     """
 
 
+class CapabilityUnavailable(PolicyHalt):
+    """No backend permitted at this classification provides the capability needed.
+
+    A subclass of PolicyHalt because the workflow consequence is the same, but
+    distinguishable because the remedy is not: PolicyHalt means configure a
+    backend with acceptable residency, this means configure one that can do the
+    job. The message names both the classification and the missing capability.
+    """
+
+
 @runtime_checkable
 class PolicyEnforcementPoint(Protocol):
     """The single choke point for model access.
@@ -91,8 +108,15 @@ class PolicyEnforcementPoint(Protocol):
     forbidden.
     """
 
-    def resolve_backend(self, classification: SensitivityClass) -> "ModelBackend":
-        """Return the most restrictive permitted backend, or raise PolicyHalt."""
+    def resolve_backend(self, classification: SensitivityClass,
+                        capability: "ModelCapability") -> "ModelBackend":
+        """Return the most restrictive permitted *and capable* backend.
+
+        Ordering is load-bearing: policy filters first, capability narrows within
+        the permitted set, residency orders what remains. Capability is a filter
+        and never a selector, or the property that a bypass is inexpressible
+        would be lost.
+        """
         ...
 
     def permitted_backends(self, classification: SensitivityClass) -> list[str]:

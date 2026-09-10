@@ -20,6 +20,16 @@ from pydantic import BaseModel, ConfigDict, Field
 SAMPLE_ROWS = 200
 MAX_CATEGORIES = 25
 
+# A table with more columns than this is almost certainly not a table: prose
+# split on spaces produces hundreds of "columns". Profiling it as tabular yields
+# nonsense that then crowds out the real tables in any prompt built from the
+# profile.
+MAX_PLAUSIBLE_COLUMNS = 64
+
+# Fraction of sampled rows that must have the header's field count for the file
+# to be treated as tabular. Ragged data is common; prose is not merely ragged.
+MIN_CONSISTENT_ROWS = 0.8
+
 
 class ColumnProfile(BaseModel):
     model_config = ConfigDict(frozen=True)
@@ -65,6 +75,36 @@ class TreeProfile(BaseModel):
     files: list[FileProfile]
     total_bytes: int
     file_count: int
+
+    def compact(self, max_files: int = 60, max_columns: int = 80) -> dict:
+        """A reduced view for inclusion in a prompt.
+
+        Truncating a serialised profile by slicing the string produces invalid
+        JSON and silently drops whichever files happen to sort last, which is
+        how a real table can vanish behind a large one. Reducing structurally
+        instead keeps the document well formed and makes the omission explicit.
+        """
+        files = []
+        for f in self.files[:max_files]:
+            entry: dict = {"path": f.path, "bytes": f.byte_size,
+                           "media_type": f.media_type}
+            if f.tabular:
+                cols = f.tabular.columns[:max_columns]
+                entry["columns"] = [
+                    {"name": c.name, "type": c.inferred_type,
+                     "distinct": c.distinct_count, "nulls": c.null_count,
+                     "categorical": c.looks_categorical, "shape": c.example_shape}
+                    for c in cols
+                ]
+                if len(f.tabular.columns) > max_columns:
+                    entry["columns_omitted"] = len(f.tabular.columns) - max_columns
+                entry["rows_sampled"] = f.tabular.row_count_sampled
+            files.append(entry)
+        out: dict = {"file_count": self.file_count,
+                     "total_bytes": self.total_bytes, "files": files}
+        if self.file_count > max_files:
+            out["files_omitted"] = self.file_count - max_files
+        return out
 
 
 def _shape_of(value: str) -> str:
@@ -136,6 +176,18 @@ def profile_tabular(path: Path) -> TabularProfile | None:
 
     header = rows[0] if has_header else [f"column_{i+1}" for i in range(len(rows[0]))]
     body = rows[1:] if has_header else rows
+
+    # Plausibility check. `.txt` is accepted as possibly-tabular because tabular
+    # data is often shipped that way, but a prose file will sniff a delimiter and
+    # produce a wide, ragged pseudo-table. Rejecting here rather than downstream
+    # keeps the profile honest: a file we cannot describe structurally is
+    # reported as non-tabular, not as a table of nonsense.
+    if not 1 <= len(header) <= MAX_PLAUSIBLE_COLUMNS:
+        return None
+    if body:
+        consistent = sum(1 for r in body if len(r) == len(header))
+        if consistent / len(body) < MIN_CONSISTENT_ROWS:
+            return None
 
     columns = []
     for idx, name in enumerate(header):

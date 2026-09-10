@@ -12,7 +12,8 @@ import json
 from pathlib import Path
 
 from datadirector_contracts import (
-    CapabilityManifest, Digest, ModelRequest, ModelResponse, Residency,
+    CapabilityManifest, Digest, ModelCapability, ModelRequest, ModelResponse,
+    Residency,
 )
 
 from ..errors import ExternalServiceError
@@ -29,6 +30,9 @@ class ReplayBackend:
 
     def manifest(self) -> CapabilityManifest:
         return manifest_for(self.name, "replay", Residency.ON_PREMISE, offline=True)
+
+    def capabilities(self) -> set[ModelCapability]:
+        return {ModelCapability.TEXT_GENERATION, ModelCapability.STRUCTURED_OUTPUT}
 
     def residency(self) -> Residency:
         return Residency.ON_PREMISE
@@ -61,6 +65,9 @@ class RecordingBackend:
 
     def manifest(self) -> CapabilityManifest:
         return self.inner.manifest()
+
+    def capabilities(self) -> set[ModelCapability]:
+        return self.inner.capabilities()
 
     def residency(self) -> Residency:
         return self.inner.residency()

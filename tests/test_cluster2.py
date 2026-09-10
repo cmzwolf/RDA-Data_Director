@@ -423,3 +423,41 @@ def test_inference_without_indicators_is_marked_not_silently_trusted(tmp_path, j
         inferred_sensitivity="sensitive", inference_indicators=[]))), tmp_path)
     proposed, _, _ = agent.parse(JobState(job_id=job_id), doc)
     assert proposed.assertions[0].payload.inference_indicators == ["model gave no indicators"]
+
+
+# -- Profiling plausibility (found by cluster-3 integration) ---------------
+
+def test_prose_is_not_profiled_as_a_table(tmp_path):
+    """A prose .txt sniffs a delimiter and yields hundreds of pseudo-columns.
+
+    Found when a notes file crowded a real table out of a prompt built from the
+    profile. A file we cannot describe structurally must be reported as
+    non-tabular, not as a table of nonsense.
+    """
+    p = tmp_path / "notes.txt"
+    p.write_text("Field notes from the visit. " + ("Further detail. " * 500))
+    assert profile_tabular(p) is None
+
+
+def test_ragged_rows_are_rejected(tmp_path):
+    p = tmp_path / "ragged.csv"
+    p.write_text("a,b,c\n1,2,3\n1,2,3,4,5,6\n7\n8,9\n1\n2\n")
+    assert profile_tabular(p) is None
+
+
+def test_genuine_tables_still_profile(tmp_path):
+    p = tmp_path / "t.csv"
+    p.write_text("station,date,temp\nS14,2019-03-02,4.1\nS15,2019-03-03,5.6\n")
+    assert [c.name for c in profile_tabular(p).columns] == ["station", "date", "temp"]
+
+
+def test_compact_profile_stays_valid_json_and_says_what_it_omitted(tmp_path):
+    """Slicing a serialised profile produces invalid JSON and drops whichever
+    files sort last; reducing structurally makes the omission explicit."""
+    import json
+    for i in range(80):
+        (tmp_path / f"f{i:03d}.csv").write_text("a,b\n1,2\n")
+    compact = profile_tree(tmp_path).compact(max_files=10)
+    json.dumps(compact)
+    assert len(compact["files"]) == 10
+    assert compact["files_omitted"] == 70

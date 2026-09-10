@@ -21,7 +21,13 @@ dependencies = [
 datadirector = "datadirector.cli:main"
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0", "pytest-cov"]
+# Pillow supports deterministic structure measurement of images, used to
+# contradict a vision model that reports an image as empty when it is not.
+# Optional: without it the contradiction check reports "unknown" and is not
+# made, so a missing dependency changes nothing about how much an image is
+# trusted.
+media = ["pillow>=10.0"]
+dev = ["pytest>=8.0", "pytest-cov", "pyflakes>=3.0", "pillow>=10.0"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/datadirector"]

@@ -7,6 +7,10 @@ package is correct and the document has a bug.
 Reading order for a newcomer:
   primitives   identifiers, digests, references
   sensitivity  the classification lattice and its tightening asymmetry
+  exposure     what payload was released to a model, and the budget on it
+  probing      the closed vocabulary of what a model may ask to see
+  media        images and audio, and the recorded state of not having looked
+  gate         everything awaiting a human decision before deposit
   assertions   the shared envelope for claims extracted from documents
   payloads     the three claim types: declaration, DMP, instruction
   events       the append-only log and its hash chain
@@ -20,6 +24,32 @@ Reading order for a newcomer:
 
 from .primitives import ArtefactRef, Digest, MaterialClass, Orcid, Residency
 from .sensitivity import Classification, SensitivityClass
+from .gate import (
+    GateItem,
+    GateItemKind,
+    GateState,
+    ItemDecision,
+    RedactionProposal,
+    Resolution,
+    Treatment,
+)
+from .media import (
+    InspectionTier,
+    MediaFinding,
+    UninspectedReason,
+)
+from .probing import (
+    ProbeKind,
+    ProbeRefused,
+    ProbeRequest,
+    ProbeResult,
+)
+from .exposure import (
+    BudgetExceeded,
+    Exposure,
+    ExposureBudget,
+    ReleaseKind,
+)
 from .assertions import Assertion, AssertionSet, AuthorityState, Channel, Evidence
 from .payloads import DeclarationClaim, DmpCommitment, Instruction, InstructionKind
 from .events import Event, EventKind, HUMAN_ACTS, verify_chain
@@ -33,12 +63,14 @@ from .containers import (
     MemberRole,
 )
 from .relations import RelatedResource, RelationOrigin, RelationVocabulary
-from .policy import PolicyConfig, PolicyEnforcementPoint, PolicyHalt
+from .policy import CapabilityUnavailable, PolicyConfig, PolicyEnforcementPoint, PolicyHalt
 from .plugins import (
     CapabilityManifest,
     DMPSource,
     IdentityProvider,
+    ImageAttachment,
     ModelBackend,
+    ModelCapability,
     ModelRequest,
     ModelResponse,
     ValidationFinding,

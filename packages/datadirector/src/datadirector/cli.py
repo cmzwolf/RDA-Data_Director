@@ -17,7 +17,7 @@ import json
 import sys
 from pathlib import Path
 
-from datadirector_contracts import Event, EventKind, Orcid, Visibility
+from datadirector_contracts import Event, EventKind, Visibility
 
 from .agents.ingestion import IngestionAgent
 from .config.loader import capability_report_text, load_policy, load_wiring, resolve
@@ -33,7 +33,6 @@ APP_VERSION = "0.1.0"
 
 def _new_job_id() -> str:
     import random
-    import string
     alphabet = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
     return "job-" + "".join(random.choice(alphabet) for _ in range(26))
 
@@ -78,7 +77,7 @@ def cmd_ingest(args) -> int:
     print(f"job: {job_id}")
     print(f"files: {len(state.material)}")
     print(f"step: {state.step}")
-    print(f"awaiting: a responsibility and compliance statement, then human confirmation")
+    print("awaiting: a responsibility and compliance statement, then human confirmation")
     return 0
 
 

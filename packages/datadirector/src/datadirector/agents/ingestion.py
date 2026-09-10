@@ -15,11 +15,11 @@ from pathlib import Path
 
 from datadirector_contracts import DecisionRecord, Event, EventKind
 from datadirector_contracts.containers import ExtractionLimits
-from datadirector_contracts.primitives import ArtefactRef, Digest, MaterialClass
+from datadirector_contracts.primitives import ArtefactRef, Digest
 
 from ..containers.detect import detect
 from ..errors import ExtractionError
-from ..profiling.structural import TreeProfile, profile_tree
+from ..profiling.structural import profile_tree
 from ..state.projection import JobState
 from .base import Agent
 
@@ -54,7 +54,7 @@ class IngestionAgent(Agent):
         """
         work = self.working_root / state.job_id
         work.mkdir(parents=True, exist_ok=True)
-        options, selected, refused = [], None, None
+        options, selected = [], None
         declared_metadata = None
         checksums_verified = None
 
@@ -69,8 +69,11 @@ class IngestionAgent(Agent):
                     checksums_verified = profile.checksums_verified
                     tree = profile_tree(work / "unpacked")
                     archive_ref: ArtefactRef | None = profile.archive
-                except ExtractionError as exc:
-                    refused = str(exc)
+                except ExtractionError:
+                    # Refusal is fatal for this submission and propagates: the
+                    # workflow engine records it as a halt with the reason, so
+                    # capturing it here would duplicate the record rather than
+                    # add to it. The archive is rejected, not partially ingested.
                     raise
             else:
                 selected = "loose-file"

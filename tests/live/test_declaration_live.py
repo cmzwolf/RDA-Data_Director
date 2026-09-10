@@ -7,7 +7,6 @@ claim set carries no authority. But how often a model can be steered is a number
 the paper should report rather than assume.
 """
 
-import json
 from pathlib import Path
 
 import os

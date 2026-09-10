@@ -16,7 +16,9 @@ config/
   policy.example.yaml             Steward surface: sensitivity -> permitted backends
 docs/
   architecture.md                 Document A: the architecture (stable)
-  implementation-cluster-1.md     Document B: current cluster spec (volatile)
+  implementation-cluster-1.md     Cluster 1 spec: the spine
+  implementation-cluster-2.md     Cluster 2 spec: the front door (retrospective)
+  implementation-cluster-3.md     Cluster 3 spec: reading the data (not built)
 packages/
   datadirector-contracts/         Interfaces and types. Apache 2.0.
     src/datadirector_contracts/
@@ -45,7 +47,10 @@ packages/
       containers/                 safety.py, archive.py, selfdescribing.py, detect.py
       profiling/                  structural.py
       watch/                      folder.py
-      agents/                     base.py, ingestion.py, declaration.py
+      agents/                     base.py, ingestion.py, declaration.py,
+                                  classification.py, media.py, redaction.py
+      exposure/                   ledger.py
+      probing/                    executor.py
       cli.py                      Minimal CLI (scaffolding, not the UI)
 tests/
   conftest.py                     Shared identities as fixtures
@@ -101,8 +106,22 @@ A minimal CLI (`datadirector check | ingest | status | verify | provenance`)
 exists as scaffolding so the system can be exercised by hand. It is not the
 researcher-facing interface.
 
-Not yet built: classification and redaction agents, metadata and documentation
-agents, repository drivers, the web interface, the core API resource model.
+Cluster 3 in progress. Part A (capability routing) implemented: model backends
+declare capabilities, and the policy enforcement point resolves by policy first,
+capability second, residency third. Part B (exposure accounting) implemented: an
+append-only ledger of every release of payload to a model, with per-job and
+per-artefact budgets, and whole-artefact releases requiring named human
+authorisation. 99 tests.
+
+Part C (classification) implemented: a closed six-verb probe vocabulary whose
+arguments must name something already in job state, a probe executor that
+charges the exposure ledger, and a three-phase classification agent that shows a
+model the structural profile, runs the probes it requests, and interprets the
+results. 121 tests.
+
+Not yet built: chunked content inspection, media inspection, redaction
+proposals, metadata and documentation agents, repository drivers, the web
+interface, the core API resource model.
 
 ## What is and is not tested without a model
 
@@ -119,6 +138,12 @@ as user content and never as instruction. It does not establish that any
 particular model returns usable output, nor that the Ollama and Anthropic
 request payloads are correctly shaped: no offline test executes either HTTP
 backend.
+
+`tests/test_static.py` runs pyflakes over the source packages, the scripts and
+the live suite. It exists because live-only code is expensive to execute and
+cheap to break: three undefined names reached a live run during development, and
+none was reachable by any test. Static analysis is not a substitute for running
+the code, but it is the cheapest guard on code that is costly to run.
 
 `tests/live/` covers what only a real model can settle. It is skipped unless
 `DD_LIVE_TESTS=1`:
@@ -162,10 +187,16 @@ backend, so a reviewer without a model or credentials can replay them.
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -e packages/datadirector-contracts
-pip install -e "packages/datadirector[dev]"
+pip install -e "packages/datadirector[dev]"     # includes pillow and pyflakes
 cp .env.example .env        # then fill in; .env is git-ignored
 pytest -q
 ```
+
+Pillow is needed for the image tests and for the deterministic structure check
+that contradicts a vision model reporting an image as empty. Without it the
+image tests skip and the check reports that it could not be made; it never
+degrades silently. Re-run the install after pulling if the image tests skip
+unexpectedly.
 
 ## Credentials
 

@@ -686,6 +686,46 @@ different lifecycles.
 | **2. Metadata and workflow artefacts** | Records, decision records, validation reports, provenance | Retained | Constrained if confidential |
 | **3. Derived artefacts** | Structural profiles, extracts, samples, anything transmitted to a model | Not retained; only a description and hash are kept | Full constraints |
 
+#### The exposure ledger
+
+Class-3 artefacts are recorded in an append-only **exposure ledger**: one entry
+per release of payload to a model, holding the artefact reference, what kind of
+release it was, the byte count, the digest of what was sent, the classification
+in force, the backend and its residency, and a label naming the field or chunk
+responsible. The released content itself is never stored, so the ledger can
+prove what was exposed without holding the exposed material.
+
+Two properties follow that the class-3 lifecycle alone does not give.
+
+**A budget, per job and per artefact.** Bounding the probe vocabulary (cluster 3
+Part C) bounds what *kind* of read is possible; it does not bound how much. A
+model steered by injected content should be able to exhaust its allowance rather
+than exfiltrate without limit. The two scopes fail differently: a per-artefact
+limit stops one file being read entirely through repeated sampling, and a
+per-job limit stops the same trick spread across many files. Exhaustion halts
+the workflow with a recorded reason rather than truncating silently, because a
+model that stops receiving data without being told will conclude the data is
+absent, which is a worse failure than stopping.
+
+**A categorical distinction for whole-artefact releases that leave the
+premises.** A field sample or a document chunk is incremental and proceeds under
+the budget. A full document or a media file exposes an entire artefact, and
+there is no smaller version of that decision, so where it goes to infrastructure
+beyond the institution it requires an identified human authorisation recorded
+against the entry.
+
+Where such a release goes to an on-premise model it does not. An earlier version
+of this rule required authorisation for every whole-artefact release including
+local ones, which made it impossible to look at an image in order to find out
+whether it was sensitive without someone first authorising the exposure — the
+same circularity the declaration gate exists to break, and one that would have
+made media inspection unreachable in precisely the deployments most needing it.
+Where material never leaves the premises, policy has already decided by
+permitting the backend at this classification.
+Derived descriptions carrying no payload — structural profiles, aggregate counts
+— are recorded for completeness but not charged, since charging for them would
+make the budget a limit on analysis rather than on disclosure.
+
 Class 3 is the class the Blueprint's reference architecture does not name, and it
 is where the compliance surface actually lies. Principle P10 extends sovereignty
 obligations to prompts, logs, temporary files, backups and embeddings. By
@@ -942,6 +982,33 @@ What the model does with the result is interpret the tree: which member is
 documentation and which is data, whether the archive holds one dataset or
 several, whether several tabular members share a schema and are partitions of
 one table. File extensions do not settle any of these.
+
+#### Documents that cannot be profiled
+
+A structural profile presupposes structure. Field notes, transcripts and reports
+have none, so for these the text itself is read, in overlapping chunks.
+
+Length is not the difficulty. The difficulty is that the disclosures this system
+exists to find are **cross-referential**: a role held by one person in one
+passage, and the size of the population holding it in another. Neither passage
+is sensitive alone, and a model shown one chunk at a time reports nothing for
+each — confidently, which makes it the worst available failure, since silence
+reads as a clean result.
+
+Two mechanisms, and the second is the one that matters. Chunks overlap, which
+handles a disclosure straddling a boundary and nothing else. Then each chunk
+contributes *observations* to an accumulating set, and a final correlation pass
+reasons over the accumulated observations rather than over the text. That pass
+can see a pairing whose halves are thousands of words apart, and it costs one
+small call rather than a second full read.
+
+Observations carry descriptions and redacted shapes, never passages: they travel
+to the correlation pass, so carrying text would multiply the exposure rather
+than bound it. Sensitivity is a property of the document and not of a chunk, so
+findings are unioned, and a chunk that is sensitive alone settles the document
+regardless of what correlation concludes.
+
+#### Deposit of container members
 
 Members are deposited **expanded**, as multiple files under one identifier,
 rather than as the original archive: individually browsable and citable on the
@@ -1227,8 +1294,36 @@ graph LR
 ```
 
 Agents never name a backend. They request the most restrictive permitted backend
-for the job's current classification, and the PEP resolves it. A misconfigured
-agent therefore cannot bypass policy, because it has no way to express a bypass.
+for the job's current classification **and the capability the task needs**, and
+the PEP resolves it. A misconfigured agent therefore cannot bypass policy,
+because it has no way to express a bypass.
+
+Resolution proceeds in a fixed order, and the order is the security property:
+policy filters which backends may see material at this classification;
+capability narrows within that permitted set; residency orders what remains.
+Capability is a filter and never a selector, so a uniquely capable backend that
+policy forbids is unreachable however badly it is needed. This means widening
+the capability vocabulary can never widen what a classification permits.
+
+Capabilities (`text-generation`, `vision`, `audio`, `long-context`,
+`structured-output`) are declared in each backend's manifest rather than
+inferred, and a backend that has not declared one is assumed not to have it.
+Assuming narrowly matters: a backend selected for vision because of a missing
+declaration would fail mid-workflow, which is the failure C7 forbids.
+
+A capability that no permitted backend provides raises a distinct halt from a
+residency failure, because the remedy differs. The first means configure a
+backend that can do the job; the second means configure one with acceptable
+residency. This is the situation in which a deployment holding sensitive images
+and permitting only local text models finds that it cannot inspect its own
+material — a fact about the configuration, knowable at startup rather than
+discovered during a deposit.
+
+**Cost, speed and quality are not routing criteria.** A deployment that quietly
+sends classification to a faster model has changed its threat posture without
+anyone deciding to, and live testing found susceptibility to vary between model
+families (§14.2). Any such routing must be an explicit policy statement, not a
+performance setting.
 
 If no permitted backend is configured for a classification, the workflow **halts
 with an explicit, logged reason**. It does not fall back to a permitted-but-less-
@@ -1239,7 +1334,129 @@ has not, refusing the work is the honest behaviour.
 This is the "technical control" that Blueprint §5.2 requires. It is a single
 auditable choke point, and it is why plugins may not hold model credentials.
 
-### 9.5 Redaction proposals
+### 9.5 Material that is not text
+
+Images, audio and instrument formats are classified in three tiers.
+
+| Tier | Method | Availability |
+|---|---|---|
+| Metadata | deterministic extraction | always |
+| Content | multimodal model | only where a backend permitted at this classification declares the capability |
+| Uninspectable | none | proprietary and instrument formats |
+
+The metadata tier runs unconditionally, because it is cheap and frequently
+decisive: a photograph of a field site carries the coordinates of the field
+site, a PDF carries the name of whoever's machine produced it, and a DICOM file
+carries patient identity by design. Findings are descriptions rather than
+values — "GPS coordinates present", never the coordinates — since repeating a
+location into the record would defeat the purpose of noticing it.
+
+**Not inspected is a recorded state, never silence.** A reviewer who sees no
+flags on a file will reasonably conclude it was checked and found clean.
+Preventing that inference is the whole contribution of this tier: the failure is
+invisible by construction unless the system says so, and it is the failure most
+likely to harm someone. The type refuses to represent an uninspected artefact
+without a coded reason and an explicit mark that its classification is a
+presumption.
+
+Reasons are coded so a deployment can be audited for how much of its material it
+cannot look at: `no-capable-backend`, `capability-not-permitted-at-
+classification`, `format-unreadable`, `encrypted`, `exceeds-size-limit`. The
+first two are distinguished because the remedies differ — install a model, or
+change policy.
+
+An uninspected image or audio artefact is presumed **sensitive**, not unknown: a
+face is personal data and a voice is biometric whatever the content proves to
+be. Only an explicit human act relaxes that, which is §9.3 again rather than a
+new rule. An inspected artefact is marked as inspected, so a reviewer can
+distinguish a finding from a presumption.
+
+Capabilities are declared in wiring configuration rather than probed, because a
+backend selected for a capability it lacks fails mid-workflow. Declaration also
+covers the case where a model supports a capability in principle but the local
+runtime does not: a vision-capable model served by a build with multimodal
+defects is text-only in that deployment, and the configuration should say so.
+
+**Images attach to the user turn and never to the system turn.** Text rendered
+inside an image — a whiteboard, a sign, a document in shot — is
+instruction-shaped material that a vision model reads, so an image in the
+instruction position is a visual prompt injection channel and the direct
+analogue of the textual case (commitment C-4). The live suite measures this
+directly, with a notice rendered as pixels instructing the agent to report the
+material as public and to deny seeing anything.
+
+The scanned-document case deserves separate mention because it is ordinary
+rather than exotic. Researchers routinely deposit photographs of consent forms,
+signed agreements and field paperwork alongside their data. The identifiers are
+in the pixels: no text pipeline sees them, and the metadata tier finds nothing,
+so a deployment without a permitted vision backend is blind to a common and
+serious disclosure and must say so rather than report a clean result.
+
+**A reader that cannot resolve an image is not an inspection.** Live testing
+found a vision model describing a rendered consent form — a name, a date of
+birth, a telephone number — as "a uniform blank near-white field with no visible
+content". The image carried some twelve thousand dark pixels; the model was
+almost certainly downscaling below the resolution at which small text survives.
+
+The result came back as inspected, not presumed, and classified public. That is
+the false assurance this tier exists to prevent, arriving through a door the
+design had not anticipated: not "we did not look" but "we looked and could not
+see". The distinction matters because the first is visible in the record and the
+second is not.
+
+A claim of emptiness is checkable without a model. Deterministic measurement of
+ink coverage and row transitions cannot read anything, but it can contradict an
+assertion that there is nothing to read, and where it does the artefact is
+recorded as uninspected with reason `content-not-resolvable` and carries the
+sensitive presumption. The check fires only on claims of emptiness: a model that
+reports seeing something is believed.
+
+The check has a further obligation to itself: where the structure measurement is
+unavailable, the record says that the claim of emptiness could not be verified.
+An unmade check must not look like a check that passed, which is the same rule
+the tier applies to the model.
+
+The resolution at which a given model can read scanned paperwork is a property
+of the deployment and belongs in its configuration guidance. The live suite
+measures the threshold rather than asserting a value.
+
+A caution drawn from testing this, and recorded because it cost three runs and
+two rounds of interpretation: the fixture renderer originally fell back to a
+blank canvas when its image library was absent. The vision model then described
+those images as empty, accurately. Every symptom pointed at the model, the
+architecture gained a defensive mechanism in response, and the cause was a
+silent degradation in the measuring apparatus. Test harnesses for
+model-dependent systems need the same rule as the systems themselves: a
+component that cannot do its job must say so rather than produce something that
+resembles a result. Faces and identifying text
+tighten the classification independently of whatever verdict the model returns
+overall, and an unreadable reply is recorded as *not inspected* rather than as a
+clean result.
+
+### 9.6 The approval gate
+
+Everything awaiting a human decision — uninspected files, redaction proposals,
+declaration and DMP discrepancies — is collected into one reviewable set.
+
+**The workflow proceeds; the gate blocks.** Every file is profiled and every
+proposal generated, then the human reviews them together with the declaration
+and the plan in view, and deposit cannot commit while any item is unresolved.
+Halting per file was the alternative and is worse in two ways: deciding whether
+an unreadable instrument file may be published is a poorer decision made in
+isolation than made alongside everything else known about the deposit, and a
+deposit containing one such file would otherwise be unusable, which would push
+researchers back to depositing without the tool.
+
+Decisions are per item and there is no bulk accept anywhere, in the gate or in
+the interface: a reviewer who can accept forty items with one action has
+reviewed nothing. Each decision is bound to an ORCID.
+
+Publishing an artefact nobody inspected requires a recorded reason. It is a
+person accepting responsibility for material that was never examined, and the
+record should say so rather than showing an approval indistinguishable from one
+made on evidence.
+
+### 9.7 Redaction proposals
 
 Where sensitive content is found, the system assists with its removal. This
 requires care, because Blueprint C2 states the tool must not attempt anonymisation
@@ -1489,6 +1706,30 @@ public, omit indicator reporting, suppress concern flags. The complying model
 did the first and not the second, so the inferred reading of the described
 content survived and the outcome was unchanged.
 
+*Field notes identify staff as well as participants.* Asked to inspect research
+field notes, a model reported that the district administrative officer and the
+officer in charge of the health post were each identifiable, on the same
+reasoning that identified the study's informant: a role held by one person in a
+population of 412. Neither was a subject of the research. The finding was not
+anticipated in the design, and it suggests that consent and redaction workflows
+framed around participants may systematically overlook the people who appear in
+research records incidentally.
+
+The same run also derived the country from two place names mentioned in passing,
+and read a consent clause excluding publication as evidence of the researchers'
+own awareness of re-identification risk — that is, it treated the document's
+compliance language as evidence about the data rather than as instruction.
+
+A fourth finding, from classification rather than injection: shown a structural
+profile of a clinic table with no name column and no free text, a model
+requested three probes out of six columns, including a cross-tabulation, and
+concluded that every row was uniquely identifiable from village and presenting
+condition together. Total payload released: 72 bytes. Shown an instrument table,
+the same model requested no probes at all and classified it as public. The
+profile-first design is therefore doing what it was built to do — targeted
+questions rather than bulk disclosure — and asking for nothing is a legitimate
+answer that the measurement must not penalise.
+
 The architecture's correctness did not depend on any of this. Across every run
 of every fixture, the described content was read as sensitive and the outcome
 was SENSITIVE, because an assertion carries no authority until a human confirms
@@ -1543,6 +1784,8 @@ system sits behind infrastructure the institution already operates.
 |---|---|
 | Channel-authority rule (C-4, ADR-024) | Injected instructions in ingested documents |
 | Guarded extraction (§8.4) | Path traversal, decompression bombs, symlink escape |
+| Exposure budget (§7.3) | A steered model exfiltrating through repeated small reads |
+| Human authority for whole-artefact release (§7.3) | An entire document reaching a model without anyone deciding |
 | Human-approved relation direction (§8.5) | Inverted relations that are well-formed and wrong |
 | Separation of prompt content from trusted instructions | Concatenation attacks that blur material and directive |
 | Policy Enforcement Point (§9.4) | Confidential material reaching an impermissible backend |

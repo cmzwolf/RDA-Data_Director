@@ -8,7 +8,8 @@ from __future__ import annotations
 
 import httpx
 from datadirector_contracts import (
-    CapabilityManifest, Digest, ModelRequest, ModelResponse, Residency,
+    CapabilityManifest, Digest, ModelCapability, ModelRequest, ModelResponse,
+    Residency,
 )
 
 from ..credentials.broker import CredentialBroker
@@ -20,15 +21,25 @@ API = "https://api.anthropic.com/v1/messages"
 
 class AnthropicBackend:
     def __init__(self, name: str, model: str, broker: CredentialBroker,
-                 scope: str = "anthropic:api", timeout: float = 120.0) -> None:
+                 scope: str = "anthropic:api", timeout: float = 120.0,
+                 capabilities: set[ModelCapability] | None = None) -> None:
         self.name = name
         self.model = model
         self._broker = broker
         self._scope = scope
         self.timeout = timeout
+        self._capabilities = capabilities or {
+            ModelCapability.TEXT_GENERATION, ModelCapability.STRUCTURED_OUTPUT,
+            ModelCapability.VISION, ModelCapability.LONG_CONTEXT,
+        }
 
     def manifest(self) -> CapabilityManifest:
-        return manifest_for(self.name, self.model, Residency.EXTRA_JURISDICTION, offline=False)
+        return manifest_for(self.name, self.model, Residency.EXTRA_JURISDICTION,
+                            offline=False, capabilities=self._capabilities)
+
+    def capabilities(self) -> set[ModelCapability]:
+        """What this backend can do."""
+        return set(self._capabilities)
 
     def residency(self) -> Residency:
         return Residency.EXTRA_JURISDICTION
@@ -38,8 +49,18 @@ class AnthropicBackend:
         # The Anthropic API takes the system prompt separately from the turns,
         # which suits the separation this system requires rather than obstructing it.
         system_turns = [m["content"] for m in messages if m["role"] == "system"]
-        user_turns = [{"role": "user", "content": m["content"]}
-                      for m in messages if m["role"] == "user"]
+        user_turns = []
+        for m in messages:
+            if m["role"] != "user":
+                continue
+            blocks: list[dict] = []
+            for data, media_type in zip(m.get("images", []),
+                                        m.get("image_media_types", [])):
+                blocks.append({"type": "image",
+                               "source": {"type": "base64",
+                                          "media_type": media_type, "data": data}})
+            blocks.append({"type": "text", "text": m["content"]})
+            user_turns.append({"role": "user", "content": blocks})
         secret = self._broker.get(self._scope)
         try:
             r = httpx.post(

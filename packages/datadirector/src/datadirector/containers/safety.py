@@ -22,7 +22,6 @@ can no longer describe honestly.
 
 from __future__ import annotations
 
-import os
 from pathlib import Path, PurePosixPath
 
 from datadirector_contracts.containers import ExtractionLimits

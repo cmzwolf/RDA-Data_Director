@@ -15,6 +15,8 @@ import os
 
 import pytest
 
+from ._ollama import endpoint as _endpoint, installed_models as _installed_models
+
 LIVE = os.environ.get("DD_LIVE_TESTS") == "1"
 requires_live = pytest.mark.skipif(not LIVE, reason="set DD_LIVE_TESTS=1 to run")
 
@@ -37,21 +39,6 @@ def model_name() -> str:
             "  DD_LIVE_TESTS=1 DD_OLLAMA_MODEL=<tag> pytest tests/live -q -s"
         )
     return name
-
-
-def _endpoint() -> str:
-    return os.environ.get("DD_OLLAMA_ENDPOINT", "http://localhost:11434")
-
-
-def _installed_models() -> list[str]:
-    try:
-        import httpx
-
-        r = httpx.get(f"{_endpoint()}/api/tags", timeout=5.0)
-        r.raise_for_status()
-        return sorted(m["name"] for m in r.json().get("models", []))
-    except Exception:
-        return []
 
 
 @pytest.fixture(scope="session")
@@ -104,3 +91,15 @@ def record_measurement():
             fh.write(json.dumps(fields, ensure_ascii=False) + "\n")
 
     return write
+
+
+@pytest.fixture(scope="session")
+def pillow_required():
+    """Image fixtures need Pillow, and so does the structure check.
+
+    Skipped rather than degraded: without Pillow the text fixtures cannot be
+    built and the contradiction check cannot be made, so any result would be
+    about the harness rather than about the model.
+    """
+    return pytest.importorskip(
+        "PIL", reason="pip install 'pillow>=10.0' to run the image tests")

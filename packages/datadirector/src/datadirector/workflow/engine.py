@@ -8,7 +8,7 @@ appropriate role.
 
 from __future__ import annotations
 
-from typing import Callable, Protocol, runtime_checkable
+from typing import Protocol, runtime_checkable
 
 from datadirector_contracts import DecisionRecord, Event, EventKind, Orcid
 from datadirector_contracts.events import CompensationPayload

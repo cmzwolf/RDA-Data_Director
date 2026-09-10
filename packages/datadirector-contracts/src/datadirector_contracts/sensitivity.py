@@ -15,7 +15,7 @@ from enum import IntEnum
 
 from pydantic import BaseModel, ConfigDict
 
-from .primitives import Orcid, utc_now
+from .primitives import Orcid
 
 
 class SensitivityClass(IntEnum):

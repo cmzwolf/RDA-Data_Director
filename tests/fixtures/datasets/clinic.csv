@@ -1,0 +1,9 @@
+record_id,village,role,dob,presenting_condition,clinician
+C001,Kerema,health worker,1984-03-02,hypertension,M. Aroa
+C002,Kerema,farmer,1991-07-19,malaria,M. Aroa
+C003,Aroma,farmer,1978-01-05,diabetes,J. Bani
+C004,Aroma,teacher,1988-11-30,malaria,J. Bani
+C005,Kerema,farmer,1995-06-14,anaemia,M. Aroa
+C006,Sivi,fisher,1982-09-08,malaria,T. Kelo
+C007,Sivi,health worker,1990-02-21,hypertension,T. Kelo
+C008,Aroma,farmer,1975-12-11,anaemia,J. Bani

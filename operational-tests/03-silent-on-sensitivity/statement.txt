@@ -1,0 +1,7 @@
+This is the enrolment register for a longitudinal cohort study. Each record
+holds the participant's surname and given name, their date of birth, their
+home address and postcode, and the date they joined the study.
+
+We collected these details so that participants could be traced for follow-up
+interviews at two and five years. The register is held by the study team and
+was compiled between January and March 2024.

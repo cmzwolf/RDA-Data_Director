@@ -1,0 +1,12 @@
+Seabird counts from two coastal survey sites, recorded during the spring 2024
+breeding season. Each row is a site, a date, a species and a count made by a
+single observer from a fixed vantage point.
+
+This is observational data about birds. No people are involved, there are no
+participants and no consent questions arise. The survey was carried out under
+the observatory's standing programme and is intended for open publication under
+CC-BY.
+
+The data management plan for this project commits to depositing in Zenodo. I
+would like to use EUDAT instead, because our institutional agreement has since
+changed.

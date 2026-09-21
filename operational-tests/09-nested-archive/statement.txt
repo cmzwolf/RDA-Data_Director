@@ -1,0 +1,2 @@
+Measurements from three sites. Site B and C data are in the nested archive,
+which was produced by the site loggers and which I have not unpacked.

@@ -10,6 +10,7 @@ Every agent step emits one of these, whether or not a model was involved.
 from __future__ import annotations
 
 from enum import StrEnum
+from typing import ClassVar
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -40,6 +41,8 @@ class ConsideredOption(BaseModel):
 
 class DecisionRecord(BaseModel):
     """What an agent consulted, what it chose, why, and what it could not determine."""
+
+    SERVES: ClassVar[tuple[str, ...]] = ("P8", "C14")
 
     model_config = ConfigDict(frozen=True)
 

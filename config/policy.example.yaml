@@ -22,6 +22,13 @@ oversight:
   redaction_review: human-in-the-loop
   post_deposit_monitoring: human-on-the-loop
 
+# Grace periods before marked working material is deleted. Only published
+# material is ever removed on a schedule, and only after the repository has
+# confirmed the record still exists: our working copy may be the only copy.
+# Material from a job that deliberately did not publish is never removed by a
+# schedule at all.
 retention_days:
   working_material: 30
+  idle_jobs: 180
+  unattributed_directories: 180
   restricted_justifications: 3650

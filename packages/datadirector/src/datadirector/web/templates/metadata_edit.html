@@ -1,0 +1,131 @@
+{% extends "base.html" %}
+{% block title %}Review the metadata · {{ job_id }}{% endblock %}
+{% block content %}
+<h1>Review the metadata for {{ job_id }}</h1>
+
+<p class="lede">
+  These are the fields the repository will publish. Check them and correct what
+  the draft got wrong or left out — nothing is published from this page. Saving
+  re-checks the record against the standard and returns you to the review screen.
+</p>
+
+{% if blocking %}
+<div role="alert" class="errors">
+  <h2>Blocking problems to fix</h2>
+  <ul class="findings-blocking">
+    {% for f in blocking %}
+    <li>{{ f.field or 'the record' }}: {{ f.message }}</li>
+    {% endfor %}
+   </ul>
+</div>
+{% endif %}
+
+{% if advisory %}
+<p class="findings-note">Noted, but these do not block publishing:</p>
+<ul class="findings-advisory">
+   {% for f in advisory %}<li>{{ f.field or 'the record' }}: {{ f.message }}</li>{% endfor %}
+</ul>
+{% endif %}
+
+<form method="post" action="/ui/jobs/{{ job_id }}/metadata">
+   <input type="hidden" name="creator_count" value="{{ form.creators | length }}">
+
+   <div class="field">
+     <label for="title">Title</label>
+     <input type="text" id="title" name="title" value="{{ form.title }}" required>
+   </div>
+
+   <fieldset class="field creators">
+     <legend>Creators</legend>
+     <p class="hint">Everyone credited with this dataset. A record with no creator
+      will be refused by the repository.</p>
+     {% for c in form.creators %}
+     <div class="creator-row">
+       <label for="creator_{{ loop.index0 }}_name">Name</label>
+       <input type="text" id="creator_{{ loop.index0 }}_name"
+             name="creator_{{ loop.index0 }}_name" value="{{ c.name }}"
+             placeholder="Family name, Given name">
+       <label for="creator_{{ loop.index0 }}_orcid">ORCID</label>
+       <input type="text" id="creator_{{ loop.index0 }}_orcid"
+             name="creator_{{ loop.index0 }}_orcid" value="{{ c.orcid }}"
+             placeholder="0000-0000-0000-0000">
+     </div>
+     {% endfor %}
+     {% if not form.creators %}
+     <p class="hint">No creator yet — add at least one above.</p>
+     {% endif %}
+   </fieldset>
+
+   <div class="field">
+     <label for="abstract">Description</label>
+     <textarea id="abstract" name="abstract" rows="5">{{ form.abstract }}</textarea>
+     {% if notes.abstract %}<p class="hint why-abstract">{{ notes.abstract }}</p>{% endif %}
+   </div>
+
+   <div class="field">
+     <label for="methods">Methods</label>
+     <textarea id="methods" name="methods" rows="4">{{ form.methods }}</textarea>
+     {% if notes.methods %}<p class="hint why-methods">{{ notes.methods }}</p>{% endif %}
+   </div>
+
+   <div class="field">
+     <label for="subjects">Keywords</label>
+     <p class="hint" id="subjects-hint">Separate with commas. A keyword already in
+      a controlled vocabulary keeps its grounding if you leave the word as it is.</p>
+     <input type="text" id="subjects" name="subjects" value="{{ form.subjects }}"
+           aria-describedby="subjects-hint">
+           {% if notes.keywords %}<p class="hint why-keywords">{{ notes.keywords }}</p>{% endif %}
+   </div>
+
+   <div class="field">
+     <label for="resource_type">Resource type</label>
+     <select id="resource_type" name="resource_type">
+       {% for rt in resource_types %}
+       <option value="{{ rt }}"{% if rt == form.resource_type %} selected{% endif %}>{{ rt }}</option>
+       {% endfor %}
+     </select>
+   </div>
+
+   <div class="field">
+     <label for="publication_year">Publication year</label>
+     <input type="text" id="publication_year" name="publication_year"
+           value="{{ form.publication_year }}" inputmode="numeric">
+   </div>
+
+   <div class="field">
+     <label for="publisher">Publisher</label>
+     <p class="hint">Leave empty to let the repository assign it.</p>
+     <input type="text" id="publisher" name="publisher" value="{{ form.publisher }}">
+   </div>
+
+   <div class="field">
+     <label for="licence_id">Licence</label>
+     <p class="hint" id="licence-hint">An SPDX identifier where one exists, e.g.
+      CC-BY-4.0.</p>
+     <input type="text" id="licence_id" name="licence_id" value="{{ form.licence_id }}"
+           aria-describedby="licence-hint">
+           {% if notes.licence %}<p class="hint why-licence">{{ notes.licence }}</p>{% endif %}
+   </div>
+
+   <div class="field">
+     <label for="licence_statement">Licence statement</label>
+     <input type="text" id="licence_statement" name="licence_statement"
+           value="{{ form.licence_statement }}">
+   </div>
+
+   <div class="field">
+     <label for="language">Language</label>
+     <input type="text" id="language" name="language" value="{{ form.language }}">
+   </div>
+
+   <div class="actions">
+     <button type="submit" name="action" value="draft"
+              formnovalidate>Draft again</button>
+     <p class="hint">Draft again re-runs the agents over everything the
+              job has recorded since the first draft; it produces a new
+              draft rather than throwing away what you have typed.</p>
+     <button type="submit">Save and re-check</button>
+     <a class="button secondary" href="/ui/jobs/{{ job_id }}/deposit">Cancel</a>
+   </div>
+</form>
+{% endblock %}

@@ -9,6 +9,13 @@
 /state/
 /work/
 
+# Deployment-local configuration, made from the examples. The real wiring
+# names endpoints and the real policy decides what may leave the machine;
+# neither belongs in a published tree.
+config/wiring.yaml
+config/policy.yaml
+local-accounts.txt
+
 # Python
 __pycache__/
 *.py[cod]

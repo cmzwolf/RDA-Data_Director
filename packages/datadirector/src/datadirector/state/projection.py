@@ -40,6 +40,15 @@ class JobState(BaseModel):
     terminal: str | None = None
     config_digest: str | None = None
     deposit_pid: str | None = None
+     # Whether the depositor's own statement has been recorded. Derived from
+     # the log like everything else here; the graph needs it because the
+     # declaration node may not run until the depositor has said something.
+    has_statement: bool = False
+
+
+      # The kinds of event this log contains. The graph's conditions read
+      # it rather than keeping a second copy of the truth beside the log.
+    seen_kinds: frozenset[EventKind] = frozenset()
 
 
 _STEP_FOR: dict[EventKind, str] = {
@@ -53,7 +62,19 @@ _STEP_FOR: dict[EventKind, str] = {
     EventKind.REDACTION_DECIDED: "dmp",
     EventKind.DMP_COMMITMENTS_READ: "repository-selection",
     EventKind.DMP_DISCREPANCY_FLAGGED: "awaiting-discrepancy-review",
-    EventKind.INSTRUCTIONS_RECEIVED: None,  # does not advance the workflow
+    # Events that are recorded but do not advance the workflow. Listed rather
+    # than silently ignored: the fold refuses kinds it does not know, and a new
+    # kind must be considered here rather than fall through.
+    EventKind.INSTRUCTIONS_RECEIVED: None,
+    EventKind.OWNER_ADDED: None,
+    EventKind.METADATA_DRAFTED: None,
+    EventKind.DOCUMENTATION_DRAFTED: None,
+    EventKind.GATE_ITEMS_DISPLAYED: None,
+    EventKind.ACCESS_AUDITED: None,
+    EventKind.STEP_STARTED: None,
+    EventKind.STEP_COMPLETED: None,
+    EventKind.STEP_FAILED: None,
+    EventKind.STEP_RECONCILED: None,
     EventKind.REPOSITORY_SELECTED: "metadata",
     EventKind.METADATA_GENERATED: "validation",
     EventKind.VALIDATION_COMPLETED: "awaiting-approval",
@@ -68,6 +89,10 @@ def _apply(state: JobState, ev: Event) -> JobState:
 
     if k is EventKind.WORKFLOW_CREATED:
         u["config_digest"] = ev.payload.get("config_digest")
+    elif k is EventKind.INSTRUCTIONS_RECEIVED:
+        if (ev.payload.get("channel")
+                == "responsibility-and-compliance-statement"):
+            u["has_statement"] = True
     elif k is EventKind.MATERIAL_REGISTERED:
         u["material"] = state.material + list(ev.payload.get("artefacts", []))
     elif k is EventKind.DECLARATION_CONFIRMED:
@@ -137,7 +162,10 @@ def fold(events: list[Event]) -> JobState:
             continue
         state = _apply(state, ev)
         i += 1
-    return state
+      # What the log has seen, derived like everything else: the graph's
+      # conditions read this rather than a second record of what happened.
+    return state.model_copy(update={
+        "seen_kinds": frozenset(event.kind for event in events)})
 
 
 def fold_to(events: list[Event], sequence: int) -> JobState:

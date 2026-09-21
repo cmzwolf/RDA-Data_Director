@@ -41,6 +41,7 @@ class Secret:
 
 
 class CredentialBroker:
+    SERVES = ("C1",)
     """Resolves scopes to secrets held in the environment."""
 
     def __init__(self, scope_to_env: Mapping[str, str], environ: Mapping[str, str] | None = None) -> None:

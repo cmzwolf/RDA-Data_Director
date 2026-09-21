@@ -58,6 +58,7 @@ NO_PAYLOAD: frozenset[ReleaseKind] = frozenset({
 
 
 class ExposureLedger:
+    SERVES = ("P10", "R10", "C16")
     """One file per job. Append-only."""
 
     def __init__(self, root: Path | str, budget: ExposureBudget | None = None) -> None:

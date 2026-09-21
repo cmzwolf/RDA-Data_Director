@@ -19,6 +19,39 @@ from .primitives import Digest, JobId, Orcid, utc_now
 
 
 class EventKind(StrEnum):
+    # Intent and completion, for steps with effects outside this system.
+    #
+    # Recording only completions makes a crash *during* a step indistinguishable
+    # from a step never attempted, which is harmless for internal work and not
+    # harmless for anything external: a process that dies after a repository
+    # accepts an upload but before the completion is written leaves a log saying
+    # "not deposited", and a naive resume deposits again.
+    #
+    # An intent written before the effect turns that silence into a question. A
+    # started record with no matching outcome is not retried blindly; it is
+    # reconciled, by asking the external service what actually happened.
+    STEP_STARTED = "step.started"
+    STEP_COMPLETED = "step.completed"
+    STEP_FAILED = "step.failed"
+    STEP_RECONCILED = "step.reconciled"
+
+    GATE_ITEMS_DISPLAYED = "gate.items-displayed"
+    """Items were put in front of a person.
+
+    Recorded because §4.1 claims rubber-stamping is detectable from approval
+    latency, and an interval needs two endpoints: without a display time there
+    is nothing to measure a decision against."""
+
+    OWNER_ADDED = "ownership.owner-added"
+    ACCESS_AUDITED = "access.audited"
+    """An auditor read a job they do not own.
+
+    Recorded because a role whose use is invisible is an unlogged back door with
+    a respectable name."""
+
+    METADATA_DRAFTED = "metadata.drafted"
+    DOCUMENTATION_DRAFTED = "documentation.drafted"
+
     WORKFLOW_CREATED = "workflow.created"
     MATERIAL_REGISTERED = "material.registered"
     DECLARATION_PARSED = "declaration.parsed"
@@ -42,6 +75,8 @@ class EventKind(StrEnum):
 
 HUMAN_ACTS: frozenset[EventKind] = frozenset(
     {
+        EventKind.OWNER_ADDED,
+        EventKind.GATE_ITEMS_DISPLAYED,
         EventKind.DECLARATION_CONFIRMED,
         EventKind.REDACTION_DECIDED,
         EventKind.METADATA_APPROVED,
@@ -93,6 +128,66 @@ class Event(BaseModel):
 
     def digest(self) -> Digest:
         return Digest.of_canonical_json(self.model_dump(mode="json"))
+
+
+class EffectKind(StrEnum):
+    """What kind of external effect a step is about to attempt.
+
+    Recorded because reconciliation differs by kind: a created deposition can be
+    looked up, a released credential cannot be unreleased, and an exposure that
+    may or may not have reached a model must be assumed to have done so.
+    """
+
+    REPOSITORY_CREATE = "repository.create"
+    REPOSITORY_UPLOAD = "repository.upload"
+    REPOSITORY_PUBLISH = "repository.publish"
+    MODEL_CALL = "model.call"
+    EXTERNAL_FETCH = "external.fetch"
+
+
+class StepIntent(BaseModel):
+    """What is about to be attempted, written before it is attempted.
+
+    `idempotency_key` is what makes reconciliation possible rather than merely
+    visible: it is the handle by which the external service can be asked whether
+    this particular attempt already took effect.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    step: str
+    effect: EffectKind
+    target: str = Field(description="Service or resource the effect acts on.")
+    idempotency_key: str = Field(
+        description="Stable across retries of the same logical attempt. Two "
+        "attempts sharing a key are the same attempt; two with different keys "
+        "are different ones, and conflating them is how duplicates are made.")
+    detail: dict[str, Any] = Field(default_factory=dict)
+
+
+class StepOutcome(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    step: str
+    idempotency_key: str
+    result: dict[str, Any] = Field(default_factory=dict)
+
+
+class Reconciliation(BaseModel):
+    """What was found when an unfinished attempt was investigated."""
+
+    model_config = ConfigDict(frozen=True)
+
+    step: str
+    idempotency_key: str
+    finding: str = Field(
+        description="took-effect | did-not-take-effect | indeterminate")
+    detail: str
+    resolved_by: Orcid | None = Field(
+        default=None,
+        description="Set where a human decided. An indeterminate outcome is not "
+        "the system's to resolve: guessing is how a dataset gets published "
+        "twice or silently not at all.")
 
 
 class CompensationPayload(BaseModel):

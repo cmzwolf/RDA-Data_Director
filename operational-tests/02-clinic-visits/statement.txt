@@ -1,0 +1,9 @@
+Clinic attendance records from a district health post, covering February 2024.
+This is sensitive personal health data. Each row is one patient visit and
+includes the village, the patient's age and the presenting condition.
+
+Participants consented to the use of their records in research analysis. The
+consent does not extend to publication of individual records. Ethics approval
+was granted by the national health research committee, reference NHRC-2024-018.
+The legal basis is consent. Nothing here may be published in a form that
+permits re-identification.

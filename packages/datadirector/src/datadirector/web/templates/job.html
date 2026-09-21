@@ -1,0 +1,129 @@
+{% extends "base.html" %}
+{% block title %}{{ job.phase_label }} — Data Director{% endblock %}
+
+{% block content %}
+{# Ordered by what a person needs: what is happening, what they must do, then
+   the record. Owners and identifiers were at the top and pushed the actual
+   state of the job below the fold. #}
+
+<h1>{{ job.phase_label }}</h1>
+
+{% if job.halted_reason %}
+  <div role="alert" class="notice problem">
+    <p><strong>This job stopped.</strong> {{ job.halted_reason }}</p>
+    <p>Trying again is worth doing if the cause was temporary — a model that
+      timed out, a service briefly unreachable.</p>
+    {% if can_advance %}
+      <form method="post" action="/ui/jobs/{{ job.job_id }}/advance">
+        <button type="submit">Try again</button>
+      </form>
+    {% endif %}
+  </div>
+{% elif job.gate_unresolved %}
+  <div class="notice">
+    <p><strong>{{ job.gate_unresolved }} thing(s) need your decision</strong>
+      before this can be published.</p>
+    <p><a class="button" href="/ui/jobs/{{ job.job_id }}/gate">Review them</a></p>
+  </div>
+{% elif job.deposit_pid %}
+  <div class="notice done">
+    <p><strong>Published</strong> as <code>{{ job.deposit_pid }}</code>.</p>
+  </div>
+{% elif ready_to_publish %}
+    <div class="notice">
+      <p><strong>Ready to publish.</strong> Everything you were asked to decide
+        has been decided, and the record has reached the point where it can be
+        published.</p>
+      <p>Publishing mints a persistent identifier and cannot be undone, so it is
+        its own step. Check what will and will not be published, then publish.</p>
+      <p><a class="button" href="/ui/jobs/{{ job.job_id }}/deposit">Publish</a></p>
+    </div>
+
+{% elif can_advance %}
+  <div class="notice">
+    <p>{{ job.phase_detail or 'Ready to continue.' }}</p>
+    <form method="post" action="/ui/jobs/{{ job.job_id }}/advance">
+      <button type="submit">Continue</button>
+    </form>
+  </div>
+{% else %}
+  <p>{{ job.phase_detail or 'Nothing is waiting on you.' }}</p>
+{% endif %}
+
+<h2>Progress</h2>
+<ol class="phases">
+  {% for p in phases %}
+    <li class="phase phase-{{ p.state }}">
+      <span class="label">{{ p.label }}</span>
+      {# In words as well as colour: styling is invisible to a screen reader and
+         to anyone who does not perceive it. #}
+      <span class="state">{{ p.state.replace('-', ' ') }}</span>
+      {% if p.attempts_failed %}
+        <span class="retries">recovered after {{ p.attempts_failed }} failed
+          attempt(s)</span>
+      {% endif %}
+      {% if p.detail %}<span class="detail">{{ p.detail }}</span>{% endif %}
+      {# Named for the thing it opens. "what happened" repeated six times tells
+         a reader nothing about which of the six they are choosing, and offers
+         a link even where nothing has happened yet. #}
+      {% if p.event_count or p.state in ('halted', 'current', 'waiting-on-you') %}
+        <a href="/ui/jobs/{{ job.job_id }}/history?phase={{ p.key }}">details</a>
+      {% endif %}
+    </li>
+  {% endfor %}
+</ol>
+
+<h2>The material</h2>
+<dl class="facts">
+  <dt>Files</dt><dd>{{ job.material | length }}</dd>
+  <dt>Treated as</dt>
+  <dd>{{ job.sensitivity or 'not yet established' }}</dd>
+</dl>
+<p><a href="/ui/jobs/{{ job.job_id }}/history">The full record of this job</a></p>
+
+{# Ownership is real and rarely urgent. Collapsed, so it is available without
+   being the first thing a researcher is asked to think about. #}
+<details class="ownership">
+  <summary>Who can see this job
+    {%- if ownership.sole_owned %} — only you{% else %}
+      — {{ ownership.grants | length }} people{% endif %}</summary>
+
+  {% if ownership.sole_owned %}
+    <p class="hint">
+      You are the only owner. If you leave this institution this job stays
+      readable for audit, but nobody will be able to act on it. Add someone
+      before you go.
+    </p>
+  {% endif %}
+
+  <ul>
+    {% for grant in ownership.grants %}
+      <li><code>{{ grant.owner }}</code>
+        {%- if grant.granted_by %} — added by
+          <code>{{ grant.granted_by }}</code>
+          {%- if grant.reason %}, {{ grant.reason }}{% endif %}
+        {%- else %} — created this job{% endif %}</li>
+    {% endfor %}
+  </ul>
+
+  <form method="post" action="/ui/jobs/{{ job.job_id }}/owners">
+    <div class="field">
+      <label for="orcid">Add someone by ORCID</label>
+      <p class="hint" id="add-hint">
+        They gain the same rights you have. Ownership cannot be removed
+        afterwards.
+      </p>
+      <input type="text" id="orcid" name="orcid" placeholder="0000-0000-0000-0000"
+             aria-describedby="add-hint">
+    </div>
+    <div class="field">
+      <label for="reason">Why</label>
+      <input type="text" id="reason" name="reason"
+             placeholder="taking over while I am on leave">
+    </div>
+    <button type="submit">Add owner</button>
+  </form>
+</details>
+
+<p class="job-id">Job <code>{{ job.job_id }}</code></p>
+{% endblock %}

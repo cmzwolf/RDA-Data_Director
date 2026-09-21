@@ -1,0 +1,12 @@
+{
+  "dmp": {
+    "title": "Clinical interview study",
+    "dataset": [{
+      "title": "Interview transcripts",
+      "distribution": [{
+        "data_access": "closed",
+        "host": {"title": "Institutional repository, restricted"}
+      }]
+    }]
+  }
+}

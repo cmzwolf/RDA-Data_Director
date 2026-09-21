@@ -18,6 +18,7 @@ from datadirector_contracts.containers import ExtractionLimits
 from datadirector_contracts.primitives import ArtefactRef, Digest
 
 from ..containers.detect import detect
+from ..containers.safety import nested_members
 from ..errors import ExtractionError
 from ..profiling.structural import profile_tree
 from ..state.projection import JobState
@@ -34,16 +35,20 @@ def digest_file(path: Path) -> tuple[Digest, int]:
     return Digest(value=h.hexdigest()), size
 
 
+from ..workflow.graph import Condition
+from .base import Capabilities, Invocation, Outcome
+from .registry import AgentContext, register_agent
+
+@register_agent
 class IngestionAgent(Agent):
     name = "ingestion"
+    serves = ()  # supports every requirement, satisfies none alone
 
     def __init__(self, working_root: Path | str,
                  limits: ExtractionLimits | None = None) -> None:
         self.working_root = Path(working_root)
         self.limits = limits or ExtractionLimits()
 
-    def runnable(self, state: JobState) -> bool:
-        return state.step == "created" and not state.material
 
     def ingest(self, state: JobState, source: Path) -> tuple[list[Event], DecisionRecord]:
         """Register one submission and profile it.
@@ -94,8 +99,14 @@ class IngestionAgent(Agent):
             tree = profile_tree(dest)
             archive_ref = None
 
+        # Archives inside the archive are received and not opened. Surfaced so a
+        # person sees material that was never inspected, rather than files that
+        # look as though they were.
+        nested = nested_members([f.path for f in tree.files], self.limits)
+
         payload = {
             "artefacts": [f.path for f in tree.files],
+            "nested_archives": nested,
             "file_count": tree.file_count,
             "total_bytes": tree.total_bytes,
             "source_kind": selected,
@@ -126,6 +137,42 @@ class IngestionAgent(Agent):
             ),
             undetermined=(
                 ["member roles: which files are data, documentation or supplementary"]
+                + [f"{m}: an archive inside the submission, received and not "
+                   "opened; its contents have not been inspected"
+                   for m in nested]
             ),
         )
         return [self.event(state, EventKind.MATERIAL_REGISTERED, payload=payload)], decision
+
+    @classmethod
+    def build(cls, context: AgentContext) -> "IngestionAgent":
+        return cls(context.working_root)
+    @classmethod
+    def capabilities(cls) -> Capabilities:
+        return Capabilities(
+            name="ingestion",
+            summary=("receives the submission, unpacks containers under "
+                        "guard and registers what arrived"),
+            establishes=(
+                Condition("material is registered",
+                          lambda s: bool(s.material)),
+                ),
+            # Opening archives and extracting members is the ingestion
+            # guard's job - archive.py applies the zip-bomb and path rules
+            # before anything is registered. What lands is registered by
+            # name, size and medium; no member's bytes are read here.
+            inspects_material=False,
+            serves=())
+    def run(self, invocation: Invocation) -> Outcome:
+        handle = invocation.job
+        state = handle.state
+        source = handle.submission()
+        if source is None:
+            return Outcome(job_id=handle.job_id,
+                           message="nothing is staged for ingestion")
+        events, decision = self.ingest(state, source)
+        payload = events[0].payload if events else {}
+        return Outcome(job_id=handle.job_id, events=events, decision=decision,
+                       artefacts=list(payload.get("artefacts", [])),
+                       message=f"received {payload.get('file_count', 0)} "
+                                "files")

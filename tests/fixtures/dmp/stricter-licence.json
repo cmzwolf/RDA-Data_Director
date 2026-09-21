@@ -1,0 +1,11 @@
+{
+  "dmp": {
+    "dataset": [{
+      "distribution": [{
+        "data_access": "open",
+        "host": {"title": "Zenodo"},
+        "license": [{"license_ref": "CC-BY-NC-4.0"}]
+      }]
+    }]
+  }
+}

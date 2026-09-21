@@ -85,8 +85,14 @@ def test_spine_end_to_end(tmp_path, researcher, job_id):
 
     # 6. Roll back by appending, and confirm nothing was deleted.
     before = len(store.load(job_id))
-    state = engine.compensate(job_id, to_sequence=3, reason="declaration was wrong",
-                              human=researcher)
+    # The sequence is derived rather than written as a literal. A hard-coded 3
+    # broke when the engine began recording that a step had run: the test was
+    # asserting a position in the log where it meant "back to the confirmed
+    # declaration".
+    confirmed_at = next(e.sequence for e in store.load(job_id)
+                        if e.kind is EventKind.DECLARATION_CONFIRMED)
+    state = engine.compensate(job_id, to_sequence=confirmed_at,
+                              reason="declaration was wrong", human=researcher)
     assert len(store.load(job_id)) == before + 1
     assert state.classification.level is SensitivityClass.PUBLIC
 

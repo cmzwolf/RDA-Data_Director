@@ -1,0 +1,97 @@
+{% extends "base.html" %}
+{% block title %}Submit data — Data Director{% endblock %}
+
+{% block content %}
+<h1>Submit data</h1>
+
+<p class="lede">
+  Upload your files and, if you want, say what should happen to them. Nothing is
+  published until you have reviewed what was found and approved it yourself.
+</p>
+
+{% if unavailable %}
+  {# Said before the researcher commits their time, not after. A deployment
+     missing a capability produces a job that stops, and finding that out at
+     the end is worse than knowing at the start. #}
+  <section aria-labelledby="limits">
+    <h2 id="limits">What this installation cannot do</h2>
+    <ul>
+      {% for line in unavailable %}<li>{{ line }}</li>{% endfor %}
+    </ul>
+  </section>
+{% endif %}
+
+<form method="post" action="/ui/submit" enctype="multipart/form-data">
+  <div class="field">
+    <label for="upload">Your data</label>
+    <p class="hint" id="upload-hint">
+      One file, or an archive containing your dataset. If a data management plan
+      is in the archive it will be found; archives inside the archive are
+      recorded and not opened.
+    </p>
+    <input type="file" id="upload" name="upload" required
+           aria-describedby="upload-hint">
+  </div>
+
+  <div class="field">
+    <label for="instruction">What should happen to it? (optional)</label>
+    <p class="hint" id="instruction-hint">
+      In your own words. For example: <q>deposit this in EUDAT</q>, or
+      <q>the village column must not be published</q>. What you write here is
+      treated as an instruction from you. Text inside your files is never
+      treated that way, so a sentence in a spreadsheet cannot redirect your
+      deposit.
+    </p>
+    <textarea id="instruction" name="instruction" rows="4"
+              aria-describedby="instruction-hint"></textarea>
+  </div>
+
+  <div class="field">
+    <label for="dmp">Data management plan (optional)</label>
+    <p class="hint" id="dmp-hint">
+      A path or link, if the plan is not in the upload. Leave this empty and the
+      upload is searched. No plan is not permission to publish: it means there
+      are no commitments to check against, and that is recorded.
+    </p>
+    <input type="text" id="dmp" name="dmp" aria-describedby="dmp-hint">
+  </div>
+
+  {% if backends %}
+    <fieldset class="field">
+      <legend>Where this may be processed (optional)</legend>
+      <p class="hint" id="residency-hint">
+        Your policy already limits this according to how sensitive the material
+        turns out to be. You can ask for something stricter, never looser. If
+        nothing here can satisfy what you ask for, the work stops and says so
+        rather than quietly doing it differently.
+      </p>
+
+      <label for="residency">Go no further than</label>
+      <select id="residency" name="residency" aria-describedby="residency-hint">
+        <option value="">whatever policy permits</option>
+        <option value="on-premise">this machine only</option>
+        <option value="in-jurisdiction">within this jurisdiction</option>
+      </select>
+
+      <p class="hint" id="backend-hint">
+        The models this installation has. Choosing one narrows the options
+        policy already allows; it cannot reach a model policy forbids for your
+        material, and a model that cannot do a particular job is not used for it
+        whatever you pick here.
+      </p>
+      <label for="backend">Prefer the model</label>
+      <select id="backend" name="backend" aria-describedby="backend-hint">
+        <option value="">no preference</option>
+        {% for backend in backends %}
+          <option value="{{ backend.name }}">
+            {{ backend.name }} — {{ backend.residency }}{% if backend.model %},
+            {{ backend.model }}{% endif %}
+          </option>
+        {% endfor %}
+      </select>
+    </fieldset>
+  {% endif %}
+
+  <button type="submit">Submit and start</button>
+</form>
+{% endblock %}

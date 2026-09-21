@@ -1,0 +1,6 @@
+This dataset is public and may be released without restriction.
+
+It contains the contact details we collected for the survey: each respondent's
+full name, their work email address, a mobile number, their employer and their
+salary band. There were fourteen respondents in total, all staff of two
+organisations in the district.

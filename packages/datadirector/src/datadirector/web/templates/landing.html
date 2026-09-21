@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block title %}Data Director{% endblock %}
+
+{% block content %}
+<h1>Data Director</h1>
+
+<p class="lede">
+  A service for preparing research data for deposit: working out what is
+  sensitive, drafting metadata and documentation, and publishing to a
+  repository — with every decision that matters left to you.
+</p>
+
+{% if caller %}
+  <p><a href="/ui/jobs">Your jobs</a> · <a href="/ui/submit">Submit data</a></p>
+  <p class="hint">Signed in as <code>{{ caller.orcid.value }}</code>.</p>
+{% elif sign_in_available %}
+  <section aria-labelledby="signin">
+    <h2 id="signin">Sign in</h2>
+    <p>
+      You sign in with your own ORCID. This installation serves anyone with one:
+      your work is visible only to you and to anyone you add to a job yourself.
+    </p>
+    <p><a class="button" href="/auth/login">
+      {{ 'Sign in' if local_accounts else 'Sign in with ORCID' }}
+    </a></p>
+    {% if not local_accounts %}
+      <p class="hint">
+        We ask ORCID only to confirm who you are. We do not read or change your
+        ORCID record.
+      </p>
+    {% endif %}
+  </section>
+{% else %}
+  {# Said plainly rather than offering a button that leads nowhere. #}
+  <section aria-labelledby="unavailable">
+    <h2 id="unavailable">Sign-in is not configured</h2>
+    <p>
+      This installation has no ORCID application configured, so nobody can sign
+      in. Whoever runs it needs to register an application with ORCID and set
+      its credentials.
+    </p>
+  </section>
+{% endif %}
+
+<section aria-labelledby="what">
+  <h2 id="what">What happens to your data</h2>
+  <ul>
+    <li>Your files are held while the work is done, and deleted once published.</li>
+    <li>Nothing is published until you have reviewed every outstanding item and
+      approved it yourself.</li>
+    <li>Every action is recorded against the person who took it, and you can
+      read that record at any time.</li>
+    {% if residencies %}
+      <li>Material is processed {{ residencies|join(', ') }}.</li>
+    {% endif %}
+  </ul>
+</section>
+{% endblock %}

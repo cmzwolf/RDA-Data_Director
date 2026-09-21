@@ -44,7 +44,7 @@ Return ONLY a JSON object:
  "faces_visible": true|false,
  "identifying_text_visible": true|false,
  "sensitivity": "public"|"internal"|"sensitive"}
-"""
+ """
 
 MEDIA_TYPES = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png",
                ".gif": "image/gif", ".webp": "image/webp"}
@@ -60,8 +60,15 @@ DEFAULT_MAX_MEDIA_BYTES = 20 * 1024 * 1024
 CAPABILITY_FOR = {"image": ModelCapability.VISION, "audio": ModelCapability.AUDIO}
 
 
+from ..gate.items import from_media_findings
+
+from .base import Capabilities, Invocation, Outcome
+from .registry import AgentContext, register_agent
+
+@register_agent
 class MediaAgent(Agent):
     name = "media"
+    serves = ("C2",)
 
     def __init__(self, pep, working_root: Path | str,
                  *, max_bytes: int = DEFAULT_MAX_MEDIA_BYTES, ledger=None) -> None:
@@ -70,8 +77,6 @@ class MediaAgent(Agent):
         self.max_bytes = max_bytes
         self._ledger = ledger
 
-    def runnable(self, state: JobState) -> bool:
-        return state.step == "classification"
 
     def inspect(self, state: JobState, artefact: str) -> MediaFinding:
         path = self.root / artefact
@@ -274,6 +279,46 @@ class MediaAgent(Agent):
             ],
         )
         return findings, events, decision
+
+    @classmethod
+    def build(cls, context: AgentContext) -> "MediaAgent":
+        return cls(context.pep, context.working_root, ledger=context.ledger)
+    @classmethod
+    def capabilities(cls) -> Capabilities:
+        return Capabilities(
+            name="media",
+            summary=("looks at images and audio with a vision backend, "
+                     "because no text pipeline will ever see them"),
+            needs_backend=ModelCapability.VISION,
+            human_follows=True,
+            inspects_material=True,
+            serves=("C2",))
+    def run(self, invocation: Invocation) -> Outcome:
+        """Inspect the images and audio, and raise what they imply.
+        An image that cannot be inspected is not skipped: the finding that
+        nobody saw it is itself put in front of the depositor, because the
+        failure this tier exists for is the file that looked handled and had
+        never been read.
+        """
+        handle = invocation.job
+        state = handle.state
+        root = handle.unpacked_root()
+        artefacts = [a for a in handle.material() if medium_of(root / a)]
+        if not artefacts:
+            return Outcome(
+                job_id=handle.job_id,
+                decision=DecisionRecord(
+                    agent=self.identity, step="inspect-media",
+                    selected="nothing to inspect",
+                    selection_basis=("the submission holds no images or "
+                                     "audio, so there is nothing here an "
+                                     "inspector could read")),
+                message="no images or audio to inspect")
+        findings, events, decision = self.inspect_all(state, artefacts)
+        return Outcome(job_id=handle.job_id, events=events,
+                       gate_items=from_media_findings(findings),
+                       decision=decision,
+                       message=f"inspected {len(artefacts)} media files")
 
 
 def _parse(text: str) -> dict:

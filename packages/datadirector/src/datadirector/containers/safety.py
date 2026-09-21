@@ -120,16 +120,24 @@ def prepare_parent(path: Path, destination: Path) -> None:
         raise ExtractionError(f"parent directory {parent} escapes the extraction root")
 
 
-def assert_no_nested_archive(members: list[str], limits: ExtractionLimits) -> None:
-    """Nested archives are not unpacked recursively by default.
+def nested_members(members: list[str], limits: ExtractionLimits) -> list[str]:
+    """Archives inside the archive, reported rather than unpacked.
 
-    They are kept as opaque members rather than refused, so a legitimately
-    nested deposit still arrives; only automatic recursion is withheld.
+    Recursion is withheld by default: unpacking an archive found inside an
+    archive is how a small upload becomes a full disk, and the depth limit is
+    the guard. But the members are not refused either, because a legitimately
+    nested deposit — an archive per site, per year, per instrument — is ordinary
+    in research data.
+
+    So they are surfaced. The caller records them as material that was received
+    and not opened, which puts them in front of a person rather than leaving
+    them to look like ordinary files that were inspected and found unremarkable.
+
+    This function replaced one named `assert_no_nested_archive` that returned in
+    both of its branches: it asserted nothing, was called from nowhere, and
+    looked from its name like a security control that was running.
     """
     if limits.max_nesting_depth >= 2:
-        return
+        return []
     suffixes = {".zip", ".tar", ".tgz", ".gz", ".bz2", ".xz", ".7z", ".rar"}
-    nested = [m for m in members if Path(m).suffix.lower() in suffixes]
-    if nested:
-        # Informational: recorded by the caller, not an error.
-        return
+    return [m for m in members if Path(m).suffix.lower() in suffixes]

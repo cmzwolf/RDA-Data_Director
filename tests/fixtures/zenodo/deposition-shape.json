@@ -1,0 +1,10 @@
+{
+  "_note": "Key sets observed from the Zenodo sandbox on an unsubmitted draft. Recorded from a live run so the fake can be checked against reality rather than against our memory of it. Update only from an observed response, never by hand.",
+  "observed_at": "sandbox.zenodo.org",
+  "state": "unsubmitted",
+  "top_level": ["conceptrecid", "created", "files", "id", "links", "metadata",
+                "modified", "owner", "record_id", "state", "submitted", "title"],
+  "links": ["badge", "bucket", "discard", "edit", "files", "html",
+            "latest_draft", "latest_draft_html", "newversion", "publish", "self"],
+  "absent_when_unsubmitted": ["doi", "conceptdoi"]
+}

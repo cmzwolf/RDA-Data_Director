@@ -101,19 +101,24 @@ def resolve(wiring: WiringConfig, policy: PolicyConfig, registry: PluginRegistry
 ALL_REQUIREMENTS = [f"R{i}" for i in range(1, 13)]
 
 
-def capability_report_text(resolved: ResolvedConfig, refused: list[str]) -> str:
+def capability_report_text(resolved: ResolvedConfig, refused: list[str],
+                           coverage: dict[str, list[str]] | None = None) -> str:
     """Human-readable startup report (§6.3).
 
     Names what the deployment cannot do as well as what it can, so a missing
     plugin is visible rather than expressed as a silently absent feature.
     """
-    served = resolved.capability_report()
+    # Prefer what the runtime actually constructed. Entry-point discovery alone
+    # reported NOT AVAILABLE for everything, because the built-in components are
+    # not entry points — which told an operator their deployment could do
+    # nothing when it could do almost everything.
+    served = coverage if coverage is not None else resolved.capability_report()
     lines = [
         f"Data Director {resolved.application_version} "
         f"[profile: {resolved.profile.value}]",
         f"Configuration digest: {resolved.digest()}",
         "",
-        "Requirement coverage from installed plugins:",
+        "Requirement coverage from the components this deployment builds:",
     ]
     for req in ALL_REQUIREMENTS:
         who = served.get(req)

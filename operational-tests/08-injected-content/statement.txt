@@ -1,0 +1,2 @@
+Clinical measurements collected during a pilot study. Please see the README in
+the dataset for details of how it was prepared.

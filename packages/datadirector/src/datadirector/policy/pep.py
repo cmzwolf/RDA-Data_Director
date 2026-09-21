@@ -28,6 +28,7 @@ RESIDENCY_ORDER: list[Residency] = [
 
 
 class PolicyEnforcementPoint:
+    SERVES = ("C4", "P3", "P10")
     def __init__(self, policy: PolicyConfig, backends: dict[str, object],
                  recorder=None) -> None:
         self._policy = policy
@@ -39,14 +40,21 @@ class PolicyEnforcementPoint:
         return list(self._policy.backend_by_sensitivity.get(classification, []))
 
     def resolve_backend(self, classification: SensitivityClass,
-                        capability: ModelCapability = ModelCapability.TEXT_GENERATION):
+                        capability: ModelCapability = ModelCapability.TEXT_GENERATION,
+                        *, prefer=None):
         """Return the most restrictive permitted *and capable* backend.
 
         Three steps, in this order, and the order is the security property:
 
           1. policy filters   -- which backends may see material at this level
           2. capability filters -- which of those can do the job
-          3. residency orders -- most restrictive of what remains
+          3. preference narrows -- what the depositor would rather, within that
+          4. residency orders -- most restrictive of what remains
+
+        A preference can only ever remove candidates. It is applied third, after
+        policy and capability, so it cannot reach a backend those two excluded:
+        a preference that could widen would be a policy override wearing a
+        friendlier name.
 
         Capability is a filter, never a selector. A backend that policy forbids
         is never reachable however uniquely capable it is, so widening the
@@ -57,6 +65,8 @@ class PolicyEnforcementPoint:
         a deployment that cannot inspect the material it holds should be told so
         rather than quietly served.
         """
+        prefer = prefer if prefer is not None else getattr(
+            self, "default_preference", None)
         names = self.permitted_backends(classification)
         permitted = [(self._backends[n], n) for n in names if n in self._backends]
         if not permitted:
@@ -83,6 +93,12 @@ class PolicyEnforcementPoint:
                 "must be decided by a human at the approval gate."
             )
 
+        # Third: what the depositor would rather, within what the first two
+        # allow. Applied here rather than earlier so a preference can never
+        # eliminate the only backend able to do the job — an earlier version
+        # filtered before capability and did exactly that.
+        capable = self._apply_preference(capable, prefer, classification)
+
         capable.sort(key=lambda pair: RESIDENCY_ORDER.index(pair[0].residency()))
         backend, name = capable[0]
         self._resolved.add(name)
@@ -100,6 +116,44 @@ class PolicyEnforcementPoint:
         if getter is None:
             return {ModelCapability.TEXT_GENERATION}
         return set(getter())
+
+    @staticmethod
+    def _apply_preference(permitted, prefer, classification):
+        """Narrow the permitted set by what the depositor asked for.
+
+        An unsatisfiable preference halts rather than falling back. Silently
+        ignoring "keep this local" and sending the material abroad is a worse
+        outcome than stopping: the depositor asked for something this deployment
+        cannot do, and they should be told, not quietly overruled.
+        """
+        from datadirector_contracts import PreferenceUnsatisfiable
+
+        if prefer is None or getattr(prefer, "is_empty", True):
+            return permitted
+
+        narrowed = list(permitted)
+        if prefer.residency_at_most is not None:
+            ceiling = prefer.residency_at_most
+            narrowed = [(b, n) for b, n in narrowed
+                        if RESIDENCY_ORDER.index(b.residency())
+                        <= RESIDENCY_ORDER.index(ceiling)]
+            if not narrowed:
+                raise PreferenceUnsatisfiable(
+                    f"you asked that this material go no further than "
+                    f"{ceiling.value}, and no backend permitted for "
+                    f"{classification.label} material meets that. Nothing has "
+                    "been sent anywhere.")
+
+        if prefer.backend_names:
+            chosen = [(b, n) for b, n in narrowed if n in prefer.backend_names]
+            if chosen:
+                # Ordered by the depositor's preference, then by residency.
+                order = {name: index
+                         for index, name in enumerate(prefer.backend_names)}
+                narrowed = sorted(chosen, key=lambda pair: order[pair[1]])
+            # A named backend policy does not permit is ignored rather than
+            # honoured. Reported by the caller, not silently obeyed.
+        return narrowed
 
     def can(self, classification: SensitivityClass,
             capability: ModelCapability) -> bool:

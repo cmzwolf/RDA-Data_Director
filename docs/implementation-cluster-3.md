@@ -19,12 +19,17 @@ Review happens through the CLI; the proper surface is cluster 5.
 `text-generation`, `vision`, `audio`, `long-context`, `structured-output`.
 Declared in the manifest, so it is auditable rather than inferred.
 
-`PEP.resolve_backend(classification, capability)` gains a second argument.
+The signature makes the ordering part of the interface:
+`PEP.resolve_backend(classification, capability=TEXT_GENERATION, *, prefer=None)`
+- classification and capability in, one backend out, or `PolicyHalt` naming both.
 
-**The ordering is load-bearing.** Policy filters first, capability narrows
-within the permitted set, residency orders what remains. Capability is a
-*filter*, never a selector, or the property that a bypass is inexpressible is
-lost.
+**The ordering is load-bearing.** Policy filters first: which backends may see
+material at this level. Capability narrows within that permitted set. A
+depositor's preference may only remove candidates from what survived those two.
+Residency then orders what remains. Capability is a *filter*, never a selector,
+or the property that a bypass is inexpressible is lost. Preference runs third
+for the same reason: a preference that could widen the candidate set would be a
+policy override wearing a friendlier name.
 
 **Must not.** Route by cost, speed or quality. A deployment that quietly sends
 classification to a faster model has changed its threat posture without anyone
@@ -43,9 +48,17 @@ backend name.
 
 ### A2. Job-level model ledger
 
-The set of models that touched a job's material is recorded at job level, so a
-reviewer asking *"what saw this data?"* gets one answer rather than reassembling
-it from decision records.
+The set of models that touched a job's material needs one answer, so a reviewer
+asking *"what saw this data?"* is not reassembling it from decision records.
+
+Two components carry it, and the distinction matters. `PolicyEnforcementPoint`
+accumulates every backend it resolved into `models_used()` - which is per PEP
+instance, and the composition root builds one PEP per deployment, so that figure
+is what a *deployment* has resolved, not what one job saw. The per-job answer is
+the exposure ledger (§B1): `ExposureLedger.load(job_id)` and `summary(job_id)`
+return, for one job, which backend and residency each release went to, under
+which classification. That is the record a reviewer reads; `models_used()` is a
+sanity check on the deployment.
 
 ---
 
@@ -71,12 +84,17 @@ and the authorising human where release required one.
 
 ## Part C — Classification
 
-### C1. `probing/vocabulary.py`
+### C1. `probing/executor.py`, with the vocabulary in `datadirector_contracts/probing.py`
 
-**Responsibility.** The fixed set of probes a model may request.
+**Responsibility.** The fixed set of probes a model may request, and the
+executor that runs them.
 
-**Ownership: the system, and only the system.** The vocabulary is compiled into
-the contracts package. It is not configuration and it is not user input.
+**Ownership: the system, and only the system.** The vocabulary is the
+`ProbeKind` enumeration compiled into the contracts package, together with
+`VALUE_RETURNING`, which names the two probes that release payload and are
+therefore charged against the budget. It is not configuration and it is not user
+input; `probing/executor.py` resolves and runs what the enumeration permits and
+nothing else.
 
 The reasoning is worth recording, because each alternative owner has a distinct
 failure:
@@ -91,9 +109,24 @@ The general rule this instantiates: a probe vocabulary is a **capability
 boundary**, and capability boundaries are never safely configurable outward.
 Same reason `NoBackendAction` admits exactly one value.
 
-**Configuration gets the dial, not the vocabulary.** Deployments tune maximum
-sample sizes, per-job and per-artefact byte budgets, and may *disable* individual
-probes. Narrowing is always available; widening is not expressible.
+**Configuration gets the dial, not the vocabulary.** The dials are
+`ExposureBudget` (per-job bytes, per-artefact bytes, per-job release count, and
+`max_sample_values`, above which a sample request is clamped and the clamping
+recorded rather than refused) and the `disabled` set on `ProbeExecutor`, which
+refuses an individual probe with a message naming the policy. Narrowing is always
+available; widening is not expressible.
+
+Worth recording honestly: those dials are constructor parameters today, not
+configuration. `runtime.py` builds one `ExposureLedger` per deployment with the
+default `ExposureBudget`, and one `ProbeExecutor` per job with an empty `disabled`
+set; chunk geometry comes from the module constants `CHUNK_CHARS = 6000` and
+`CHUNK_OVERLAP = 600`, which `ContentInspector` may override per instance. The
+`content:` block in `config/wiring.example.yaml` is therefore aspirational:
+`WiringConfig` has no field for it, so a deployment that sets it changes nothing.
+Wiring the budget, the disabled set and the chunk geometry through the wiring
+file is a small change in `config/models.py` and `runtime.py`; until it is made,
+a deployment tunes them in code, and the example should not be read as evidence
+otherwise.
 
 **Adding a probe is a specification change.** It requires an ADR recording what
 the probe reveals and why the existing set is insufficient.
@@ -157,9 +190,13 @@ against the budget. A scan proposing a lower level than the declaration does not
 lower it. Contradiction produces `classification.contradicted`, not a silent
 tighten.
 
-### C3. `content/chunking.py`
+### C3. `content/inspector.py`
 
-**Responsibility.** Inspect documents too long for one context window.
+**Responsibility.** Inspect documents too long for one context window. The
+module is `ContentInspector`, constructed per job by the composition root because
+it holds that job's probe executor; the chunking itself is `chunk_text` in
+`probing/executor.py`, which the inspector drives through
+`ProbeExecutor.read_chunk` so that every chunk read is charged to the ledger.
 
 **Key behaviour.** Overlapping chunks, with an **accumulating indicator set**
 carried forward, and a final correlation pass over the accumulated indicators
@@ -181,12 +218,29 @@ which would be the worst possible failure — confident silence.
 
 ## Part D — Media
 
-### D1. `media/metadata.py`
+### D1. `media/metadata.py` and `media/imagestats.py`
 
-**Responsibility.** Deterministic extraction of embedded metadata. No model.
+**Responsibility.** Deterministic extraction of embedded metadata, and a
+deterministic structure estimate for images. No model in either module.
 
-EXIF including GPS, DICOM patient tags, PDF author and producer, audio ID3,
-instrument headers, document revision history.
+`metadata.py` reads EXIF including GPS, DICOM patient tags, PDF author and
+producer, audio ID3, instrument headers and document revision history. Findings
+are *descriptions* rather than values: "GPS coordinates present", never the
+coordinates, because a finding travels into provenance and events where the value
+would have no business being.
+
+`imagestats.py` exists because of a live-test failure. A vision model was shown a
+rendered consent form carrying a name, a date of birth and a telephone number and
+reported "a uniform blank near-white field with no visible content"; the image
+carried roughly twelve thousand dark pixels, and the model had almost certainly
+downscaled it below the resolution at which small text survives. The verdict came
+back `tier=content, sensitivity=public`, which reads as *inspected and found
+clean* - the false assurance §9.5 exists to prevent, arriving through a door the
+design had not anticipated: not "we did not look" but "we looked and could not
+resolve". `measure()` estimates ink coverage and row transitions, crude by
+design, because its only job is to contradict a claim of emptiness. Where Pillow
+is not installed it reports "unknown" and the contradiction is not made: a missing
+optional dependency must not make an image trusted more *or* less.
 
 **Why first.** Cheap, high yield, and frequently where the actual leak is: a
 photograph of a field site carries the coordinates of the field site.
@@ -212,12 +266,17 @@ content. Only an explicit human act relaxes it — the §9.3 asymmetry again, so
 no new rule.
 
 **Uninspected reasons** are coded, not free text: `no-capable-backend`,
-`capability-not-permitted-at-classification`, `format-unreadable`, `encrypted`,
-`exceeds-size-limit`.
+`capability-not-permitted-at-classification`, `content-not-resolvable`,
+`format-unreadable`, `encrypted`, `exceeds-size-limit`. The third is the one that
+came from live testing rather than from the design: a model that reports a blank
+image while `media/imagestats.py` measures substantial dark structure did not
+inspect anything, and recording its verdict as an inspection would produce exactly
+the false assurance the tier exists to prevent.
 
 **Tests.** An image at `sensitive` with no permitted vision backend yields
 `uninspected(capability-not-permitted-at-classification)` and a sensitive
-presumption, and the workflow continues. EXIF GPS is found without any model.
+presumption, and the workflow continues. EXIF GPS is found without any model
+(`media/metadata.py` reports the *presence* of the field, never its value).
 
 ---
 
@@ -251,8 +310,13 @@ bound to an ORCID with a reason code. Unresolved items block deposit.
 Each entry: location, reason code from the controlled vocabulary, evidence, and
 a proposed treatment (`suppress`, `generalise`, `pseudonymise`, `coarsen`).
 
-**Must not.** Apply anything without per-item approval. Overwrite the original —
-approved items produce a new working artefact.
+**Must not.** Apply anything. Nothing in this module redacts, marks or removes:
+`run()` proposes, records on the log that the proposals are the agent's own, and
+returns gate items. The applied working copy is not produced here — applying an
+approved treatment to data is outside the system's remit under ADR-013, which is
+why the agent's decision record says the proposals *would* be applied to a new
+artefact rather than over the original, and why no code path in this cluster
+rewrites an artefact a researcher submitted.
 
 **Invariants.** Recorded via the confidential-provenance mechanism (§7.5): reason
 codes in the open graph, justification digests, content in the restricted store.
@@ -296,7 +360,9 @@ unaccounted exposure, and there is no way to reconstruct it afterwards.
   independently sensitive has demonstrated nothing.
 - An uninspectable file reaches the gate as an item, with a coded reason and a
   sensitive presumption, and blocks deposit until decided.
-- A redaction proposal requires per-item approval and writes to a new artefact.
+- A redaction proposal requires per-item approval, and nothing in the system
+  rewrites a submitted artefact: approval is recorded, and the treatment is
+  carried forward as a decision rather than as a mutation of the material.
 
 ## Live tests to add
 

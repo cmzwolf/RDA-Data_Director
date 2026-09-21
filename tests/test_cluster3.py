@@ -1245,20 +1245,14 @@ pytest.importorskip("PIL", reason="Pillow is needed to build image fixtures")
 
 
 def _text_image_bytes(lines, width=900, line_height=34):
-    from PIL import Image, ImageDraw, ImageFont
-    import io
-    image = Image.new("RGB", (width, line_height * (len(lines) + 2)), (250, 250, 248))
-    draw = ImageDraw.Draw(image)
-    try:
-        font = ImageFont.truetype(
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 22)
-    except OSError:
-        font = ImageFont.load_default()
-    for i, line in enumerate(lines):
-        draw.text((30, line_height * (i + 1)), line, fill=(20, 20, 20), font=font)
-    buf = io.BytesIO()
-    image.save(buf, format="PNG")
-    return buf.getvalue()
+    """Render text through the same helper the live fixtures use.
+
+    Sharing it matters: an earlier duplicate here carried its own hard-coded
+    Linux font path, so the two could disagree about whether a fixture had
+    rendered.
+    """
+    from tests.live._images import text_png
+    return text_png(lines, width=width, line_height=line_height)
 
 
 def test_measurement_distinguishes_text_from_a_blank_field(tmp_path):
@@ -1355,6 +1349,10 @@ def test_text_fixtures_refuse_to_render_blank():
     model then correctly described the result as empty, and two rounds of
     interpretation were built on it before the cause was found. A fixture that
     cannot be built must fail loudly rather than render something else.
+
+    The same guard later caught a second version of the bug: a hard-coded Linux
+    font path meant macOS fell through to Pillow's bitmap default, which renders
+    text a model cannot resolve. Fonts are now discovered across platforms.
     """
     import sys
     from tests.live import _images
@@ -1376,3 +1374,20 @@ def test_text_fixtures_refuse_to_render_blank():
     finally:
         sys.modules.clear()
         sys.modules.update(monkey)
+
+
+def test_a_scalable_font_is_found_on_this_platform():
+    """Font discovery, not rendering, is what broke on macOS.
+
+    Pillow's bitmap default is legible to a human at full size and close to
+    invisible to a model that downscales, so falling back to it silently
+    produces fixtures that measure nothing.
+    """
+    from PIL import ImageFont
+    from tests.live._images import _load_font
+
+    font = _load_font(22)
+    assert isinstance(font, ImageFont.FreeTypeFont), (
+        "no scalable font was found on this platform; add its path to "
+        "FONT_CANDIDATES in tests/live/_images.py"
+    )

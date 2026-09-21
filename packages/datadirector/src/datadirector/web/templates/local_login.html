@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% block title %}Sign in — Data Director{% endblock %}
+
+{% block content %}
+<h1>Sign in</h1>
+
+<p role="note" class="notice">
+  This installation is using <strong>local development accounts</strong>. These
+  identities are asserted, not proven: anything recorded under them is marked as
+  locally authenticated, so a development run stays distinguishable from real
+  work.
+</p>
+
+{% if error %}
+  <p role="alert" class="error">{{ error }}</p>
+{% endif %}
+
+<form method="post" action="/auth/local">
+  <div class="field">
+    <label for="identifier">Identifier</label>
+    <input type="text" id="identifier" name="identifier" required
+           autocomplete="username" value="{{ identifier or '' }}">
+  </div>
+  <div class="field">
+    <label for="password">Password</label>
+    <input type="password" id="password" name="password" required
+           autocomplete="current-password">
+  </div>
+  <button type="submit">Sign in</button>
+</form>
+
+{% if accounts %}
+  <section aria-labelledby="available">
+    <h2 id="available">Accounts in this installation</h2>
+    {# Listed because they are development fictions, not people: there is
+       nothing to protect, and hunting for the identifier in a text file while
+       debugging a workflow is friction for no benefit. Passwords are not
+       shown. #}
+    <ul>
+      {% for account in accounts %}
+        <li>
+          <code>{{ account.orcid.value }}</code>
+          {% if account.label %}— {{ account.label }}{% endif %}
+          {% if account.roles %}
+            ({{ account.roles | map(attribute='value') | join(', ') }})
+          {% endif %}
+        </li>
+      {% endfor %}
+    </ul>
+  </section>
+{% endif %}
+{% endblock %}

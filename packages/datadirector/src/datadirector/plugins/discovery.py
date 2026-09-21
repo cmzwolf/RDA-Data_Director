@@ -34,6 +34,7 @@ PROTOCOLS: dict[str, type] = {
 
 
 class PluginRegistry:
+    SERVES = ("P9", "P7")
     """Discovered plugins, indexed by protocol and by name."""
 
     def __init__(self) -> None:

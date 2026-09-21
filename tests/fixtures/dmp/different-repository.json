@@ -1,0 +1,13 @@
+{
+  "dmp": {
+    "title": "Coastal station monitoring",
+    "dataset": [{
+      "title": "Surface temperature series",
+      "distribution": [{
+        "data_access": "open",
+        "host": {"title": "PANGAEA", "url": "https://pangaea.de"},
+        "license": [{"license_ref": "CC-BY-4.0"}]
+      }]
+    }]
+  }
+}

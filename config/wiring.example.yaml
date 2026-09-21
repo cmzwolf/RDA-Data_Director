@@ -13,6 +13,9 @@ backends:
   - name: local-qwen
     kind: ollama
     endpoint: http://localhost:11434
+    # The model tag at that endpoint. Without it the runtime would have to guess
+    # from the backend's name, which works only when they happen to match.
+    model: qwen3.8:27b-mlx
     residency: on-premise
     # Declared, not probed: a backend selected for a capability it lacks fails
     # mid-workflow. Remove `vision` if the model or runtime cannot accept images.
@@ -22,6 +25,7 @@ backends:
     timeout_seconds: 600
   - name: remote-claude
     kind: anthropic
+    model: claude-sonnet-4-5
     residency: extra-jurisdiction
     capabilities: [text-generation, structured-output, vision, long-context]
 
@@ -43,3 +47,7 @@ plugins:
 credential_env_vars:
   zenodo:deposit: DD_ZENODO_TOKEN
   anthropic:api: DD_ANTHROPIC_API_KEY
+  # Needed for sign-in. Without this entry the routes mount, send the visitor
+  # to ORCID, and fail at the token exchange — which is a confusing way to
+  # discover a missing line of configuration.
+  orcid:client-secret: DD_ORCID_CLIENT_SECRET

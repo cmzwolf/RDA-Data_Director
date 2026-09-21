@@ -23,6 +23,7 @@ AUDITOR_ROLES = frozenset({"auditor", "data-steward"})
 
 
 class RestrictedStore:
+    SERVES = ("C2", "P5", "C12")
     """Append-only, like everything else.
 
     Entries are never deleted: a digest recorded in the chain must always

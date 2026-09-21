@@ -1,0 +1,6 @@
+Hourly temperature and humidity readings from an automatic weather station on
+the coast, collected between 2019 and 2023. The instrument is unattended and
+records no information about people. There are no participants, no consent
+questions and no third-party rights. The data were collected under the
+observatory's standing programme and are intended for open publication under
+CC-BY.

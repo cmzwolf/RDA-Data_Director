@@ -91,8 +91,15 @@ _SENSITIVITY = {
 }
 
 
+from datadirector_contracts import ModelCapability
+from ..workflow.graph import Condition
+from .base import Authority, Capabilities, Invocation, Outcome
+from .registry import AgentContext, register_agent
+
+@register_agent
 class DeclarationAgent(Agent):
     name = "declaration"
+    serves = ("C2", "P2")
 
     def __init__(self, pep, working_root: Path | str,
                  *, infer_sensitivity: bool = True) -> None:
@@ -100,8 +107,6 @@ class DeclarationAgent(Agent):
         self.working_root = Path(working_root)
         self._inference_enabled = infer_sensitivity
 
-    def runnable(self, state: JobState) -> bool:
-        return state.step == "awaiting-declaration"
 
     def parse(self, state: JobState, document: Path,
               *, classification: SensitivityClass = SensitivityClass.SENSITIVE
@@ -160,6 +165,15 @@ class DeclarationAgent(Agent):
                  if a.payload.inferred_sensitivity is not None), None),
             "inference_indicators": [
                 i for a in claims for i in a.payload.inference_indicators][:12],
+            # The claims themselves, so the proposal survives a restart and can
+            # be put back in front of a person. Summary counts were all this
+            # event carried, which meant the thing awaiting confirmation existed
+            # only in the memory of the process that made it.
+            #
+            # These are Class 2 material: structured assertions about the data,
+            # not the data. The indicators describe what produced a reading
+            # ("dates of birth") rather than reproducing what was read.
+            "claims": [json.loads(a.payload.model_dump_json()) for a in claims],
         })]
         return assertion_set, events, decision
 
@@ -292,3 +306,60 @@ class DeclarationAgent(Agent):
             "authority": confirmed.state.value,
         })]
         return confirmed, events, decision
+
+    @classmethod
+    def build(cls, context: AgentContext) -> "DeclarationAgent":
+        return cls(context.pep, context.working_root,
+                   infer_sensitivity=context.infer_sensitivity)
+    @classmethod
+    def capabilities(cls) -> Capabilities:
+        return Capabilities(
+            name="declaration",
+            summary=("reads the depositor's statement into proposed claims "
+                     "about the collection"),
+            needs_backend=ModelCapability.TEXT_GENERATION,
+            human_follows=True,
+            establishes=(
+                Condition("the statement has been read into claims",
+                          lambda s: EventKind.DECLARATION_PARSED
+                          in s.seen_kinds),
+            ),
+            # It reads a statement - the depositor's own words, recorded
+            # verbatim at an authenticated entry point - never submitted
+            # material. Material reaches classification, not here.
+            inspects_material=False,
+            serves=("C2", "P2"))
+    def run(self, invocation: Invocation) -> Outcome:
+        """Read the recorded statement into claims.
+        When an instruction rides with the invocation - a re-run after the
+        depositor amended what they said - the instruction is what gets
+        read, because it arrived from the authenticated channel just now.
+        Otherwise the last statement recorded on the log is. Either way the
+        words reach this agent as text from the handle; the document on disk
+        is the orchestrator's staging, and this agent neither holds nor
+        builds the path onto the job's tree.
+        """
+        handle = invocation.job
+        state = handle.state
+        instruction = invocation.instruction
+        if (instruction is not None
+                and instruction.author is Authority.DEPOSITOR):
+            text = instruction.text
+        else:
+            text = ""
+            for event in reversed(handle.events()):
+                if (event.kind is EventKind.INSTRUCTIONS_RECEIVED
+                        and event.payload.get("channel")
+                        == "responsibility-and-compliance-statement"
+                        and event.payload.get("statement")):
+                    text = event.payload["statement"]
+                    break
+        if not text:
+            return Outcome(job_id=handle.job_id,
+                           message="no statement has been recorded yet")
+        document = handle.working("declaration.txt")
+        document.write_text(text, encoding="utf-8")
+        proposed, events, decision = self.parse(state, document)
+        return Outcome(job_id=handle.job_id, events=events, decision=decision,
+                       result=proposed,
+                       message="read the statement into proposed claims")

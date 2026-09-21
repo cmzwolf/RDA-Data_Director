@@ -41,6 +41,7 @@ def _signature(path: Path) -> tuple[int, float, int]:
 
 
 class WatchedFolder:
+    SERVES = ("P12",)
     def __init__(self, root: Path | str, *, quiet_seconds: float = 5.0) -> None:
         self.root = Path(root)
         self.root.mkdir(parents=True, exist_ok=True)

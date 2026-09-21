@@ -18,7 +18,10 @@ docs/
   architecture.md                 Document A: the architecture (stable)
   implementation-cluster-1.md     Cluster 1 spec: the spine
   implementation-cluster-2.md     Cluster 2 spec: the front door (retrospective)
-  implementation-cluster-3.md     Cluster 3 spec: reading the data (not built)
+  implementation-cluster-3.md     Cluster 3 spec: reading the data
+  implementation-cluster-4.md     Cluster 4 spec: deposit
+  implementation-cluster-5.md     Cluster 5 spec: ownership, sessions, interface
+                                  (not built)
 packages/
   datadirector-contracts/         Interfaces and types. Apache 2.0.
     src/datadirector_contracts/
@@ -43,12 +46,16 @@ packages/
       plugins/                    discovery.py
       credentials/                broker.py
       backends/                   base.py, ollama.py, anthropic.py, recording.py
-      workflow/                   engine.py
+      workflow/                   engine.py, effects.py
+      retention/                  sweeper.py
       containers/                 safety.py, archive.py, selfdescribing.py, detect.py
       profiling/                  structural.py
       watch/                      folder.py
       agents/                     base.py, ingestion.py, declaration.py,
-                                  classification.py, media.py, redaction.py
+                                  classification.py, media.py, redaction.py,
+                                  metadata.py, documentation.py,
+                                  validation.py, publication.py,
+                                  dmp.py, repository.py
       exposure/                   ledger.py
       probing/                    executor.py
       cli.py                      Minimal CLI (scaffolding, not the UI)
@@ -57,6 +64,7 @@ tests/
   test_invariants.py              Architecture safety properties (contracts)
   test_cluster1.py                Spine behaviour
   test_end_to_end.py              Cluster-1 definition of done
+  fake_zenodo.py                  Local stand-in for the deposit API
   test_cluster2.py                Extraction attacks, profiling, agents
 ```
 
@@ -119,9 +127,9 @@ charges the exposure ledger, and a three-phase classification agent that shows a
 model the structural profile, runs the probes it requests, and interprets the
 results. 121 tests.
 
-Not yet built: chunked content inspection, media inspection, redaction
-proposals, metadata and documentation agents, repository drivers, the web
-interface, the core API resource model.
+Everything listed in that paragraph as unbuilt has since been built; the
+cluster notes above are a record of how the work went, and the sections below
+describe the system as it now stands.
 
 ## What is and is not tested without a model
 
@@ -192,11 +200,16 @@ cp .env.example .env        # then fill in; .env is git-ignored
 pytest -q
 ```
 
-Pillow is needed for the image tests and for the deterministic structure check
-that contradicts a vision model reporting an image as empty. Without it the
-image tests skip and the check reports that it could not be made; it never
-degrades silently. Re-run the install after pulling if the image tests skip
-unexpectedly.
+Several capabilities sit behind optional dependencies: Pillow for image
+structure measurement and image fixtures, jsonschema for R4 schema validation,
+pyflakes for the static checks. The software degrades correctly without any of
+them — a missing library is reported as a check that could not be made, never as
+a check that passed — and the corresponding tests skip rather than fail.
+
+A run always ends by listing which optional dependencies are absent and the
+command that installs them, because an environment that predates a newly
+declared dependency has now caused confusing failures three times. **Re-run the
+install after pulling.**
 
 ## Credentials
 
@@ -204,3 +217,37 @@ No credential value appears in any configuration file, event payload or
 provenance record. The application reads secrets only from the environment, and
 plugins request them by scope from a credential broker rather than receiving
 them as values. `.env` is git-ignored from the first commit.
+
+
+## Picking this up
+
+`docs/handover.md` records what has been run against something real and what has
+only been run against tests, the failure pattern that recurred throughout
+development, and the known gaps in the order worth addressing. Read it before
+changing anything; the architecture document describes the design, not the
+state.
+
+## A note on test speed
+
+The suite runs in about thirty seconds and makes no network requests. A guard in
+`tests/conftest.py` refuses outbound connections from any test outside
+`tests/live/`, naming the host it tried to reach.
+
+It exists because the suite once took fifty minutes on one machine and thirty
+seconds on another: `Pipeline.ingest` consulted a repository registry over the
+internet, which was slow everywhere and merely more visible on a poor
+connection. That was also wrong in production — taking in a file is local work,
+and a researcher whose upload hangs on a registry has been failed by an ordering
+decision. The lookup now belongs to the repository node, which can halt and
+retry like any other step with an external dependency.
+
+## Operational tests
+
+`operational-tests/` holds nine scenarios for running the system by hand — data,
+a statement to paste, sometimes a plan and an instruction, and a README for each
+saying what should happen, **what would count as a failure**, and what the
+scenario is trying to learn. They span plainly-open instrument data through to
+material that may engage CARE.
+
+They are not automated: their outcomes are judgements, and automating those
+would replace the thing they exist to provide.

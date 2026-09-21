@@ -1,0 +1,98 @@
+{% extends "base.html" %}
+{% block title %}Confirm what we understood — {{ job_id }}{% endblock %}
+
+{% block content %}
+<h1>Confirm what we understood</h1>
+
+<p class="lede">
+  This is what your statement was read as saying. Confirm it, correct it, or go
+  back and rewrite. Nothing downstream changes until you do: until then this is
+  a proposal with no authority.
+</p>
+
+<form method="post" action="/ui/jobs/{{ job_id }}/declaration/confirm">
+  {% for claim in claims %}
+    <fieldset class="claim">
+      <legend>Claim {{ loop.index }}</legend>
+
+      <dl>
+        <dt>You stated</dt>
+        <dd>
+          {% if claim.stated_sensitivity is not none %}
+            <strong>{{ claim.stated_sensitivity.label }}</strong>
+          {% else %}
+            {# The distinction that matters: saying nothing is not saying
+               "public". #}
+            <em>no sensitivity level stated</em>
+          {% endif %}
+        </dd>
+
+        {% if claim.inferred_sensitivity is not none %}
+          <dt>Read from what you described</dt>
+          <dd>
+            <strong>{{ claim.inferred_sensitivity.label }}</strong>
+            {% if claim.inference_indicators %}
+              <ul class="indicators">
+                {% for indicator in claim.inference_indicators %}
+                  <li>{{ indicator }}</li>
+                {% endfor %}
+              </ul>
+            {% else %}
+              <p class="hint">No grounds were given for this reading, which
+                makes it hard to check. Treat it with suspicion.</p>
+            {% endif %}
+          </dd>
+        {% endif %}
+
+        {% if claim.legal_basis %}
+          <dt>Legal basis</dt><dd>{{ claim.legal_basis.value }}</dd>
+        {% endif %}
+        {% if claim.ethics_approval_reference %}
+          <dt>Ethics approval</dt>
+          <dd>{{ claim.ethics_approval_reference }}
+            {%- if claim.ethics_approval_body %}
+              ({{ claim.ethics_approval_body }}){% endif %}</dd>
+        {% endif %}
+        {% if claim.third_party_rights %}
+          <dt>Third-party rights</dt><dd>indicated</dd>
+        {% endif %}
+        {% if claim.embargo_until %}
+          <dt>Embargo until</dt><dd>{{ claim.embargo_until }}</dd>
+        {% endif %}
+        {% if claim.indigenous_data_indicated %}
+          <dt>Indigenous data</dt>
+          <dd>indicated — a CARE referral will be raised for you to act on</dd>
+        {% endif %}
+      </dl>
+
+      {# Per claim, with no default. A single button confirming everything would
+         make this a formality, which is the one thing it must not be. #}
+      <div class="decision">
+        <input type="checkbox" id="accept-{{ loop.index0 }}"
+               name="accept" value="{{ loop.index0 }}">
+        <label for="accept-{{ loop.index0 }}">I confirm this claim</label>
+      </div>
+    </fieldset>
+  {% endfor %}
+
+  <div class="field">
+    <label for="sensitivity">Treat this material as</label>
+    <p class="hint" id="sensitivity-hint">
+      Your decision, not the system's. Leaving this alone applies the most
+      restrictive reading, because an absent statement is not a statement that
+      the data is open.
+    </p>
+    <select id="sensitivity" name="sensitivity" aria-describedby="sensitivity-hint">
+      <option value="">most restrictive (sensitive)</option>
+      {% for level in levels %}
+        <option value="{{ level.value }}">{{ level.label }}</option>
+      {% endfor %}
+    </select>
+  </div>
+
+  <button type="submit">Confirm and continue</button>
+</form>
+
+<p><a href="/ui/jobs/{{ job_id }}/declaration">Go back and rewrite the
+  statement</a></p>
+{% endblock %}

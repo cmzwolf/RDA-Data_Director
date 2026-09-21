@@ -1,0 +1,23 @@
+{
+  "dmp": {
+    "title": "Data management plan",
+    "dataset": [
+      {
+        "title": "Dataset",
+        "distribution": [
+          {
+            "data_access": "restricted",
+            "host": {
+              "title": "Zenodo"
+            },
+            "license": [
+              {
+                "license_ref": "CC-BY-NC-4.0"
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -20,7 +20,10 @@ these threats are defeated by rules and judgement is the wrong instrument.
 **Refuses:** parent references in member names, absolute paths, null bytes,
 symlinks and hardlinks, device and FIFO entries, member counts and total
 uncompressed size beyond configured limits, and any member whose *resolved* path
-escapes the extraction root.
+escapes the extraction root. The refusal of device and FIFO entries is exercised
+where tar members are actually admitted - `containers/archive.py`, which is the
+module that knows a tar entry type is a device rather than a regular file - while
+the path, budget and link rules above are the shared ones in this module.
 
 **Invariants.**
 - Escape is checked on the resolved path, not the declared one: a path component
@@ -120,17 +123,31 @@ specification was wrong. See ADR-027.
 
 ## 7. `cli.py`
 
-Scaffolding, not the researcher-facing interface: `check`, `ingest`, `status`,
-`verify`, `provenance`. The approval surface of ADR-019 belongs to cluster 5.
+Scaffolding, not the researcher-facing interface. What began as `check`,
+`ingest`, `status`, `verify` and `provenance` is now a thirteen-command surface:
+`check`, `ingest`, `watch`, `advance`, `status`, `verify`, `provenance`,
+`conformance`, `retention`, `accounts`, `session`, `serve` and `openapi`. The
+first five are still what a developer uses to drive a job by hand; `conformance`
+prints the requirement coverage of an installation, `retention` sweeps marked
+material, and `serve` mounts the API and the interface. The approval surface of
+ADR-019 belongs to cluster 5. `accounts` writes a local development account file,
+and `session` mints a session from the machine without the ORCID exchange: it is
+confined to the single-user local profile, refused anywhere else, and it records
+what it did (§10).
 
 ---
 
 ## Live testing
 
-`tests/live/` exercises the one module that calls a model, skipped unless
-`DD_LIVE_TESTS=1`. It exists because the offline suite establishes our prompt
-construction and authority handling but cannot establish that any model returns
-usable output.
+`tests/live/` exercises the modules that call a model, skipped unless
+`DD_LIVE_TESTS=1`: declaration, classification, deposit, the ORCID identity path
+and the vocabulary and registry services. It exists because the offline suite
+establishes our prompt construction and authority handling but cannot establish
+that any model returns usable output. `scripts/measure.py` runs the suite across
+every model installed locally and appends each result to
+`tests/results/measurements.jsonl`, because agreement across model families is
+evidence about the specification where one model agreeing with itself is evidence
+about sampling.
 
 Three fixture-design errors were found by running models, none by reading code:
 one fixture serving two purposes, obedience conflated with transcription, and a

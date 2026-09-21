@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+{% block title %}About your data — {{ job_id }}{% endblock %}
+
+{% block content %}
+<h1>About your data</h1>
+
+<p class="lede">
+  Tell us what this is. Nothing reads your files until you have, because what
+  you say here decides which models may see them and where they may be
+  processed.
+</p>
+
+<section aria-labelledby="received">
+  <h2 id="received">What we received</h2>
+  {# Shown before the question so the statement can be about the actual
+     material rather than about the researcher's memory of it. #}
+  <ul class="received">
+    <li>{{ summary.file_count }} file(s), {{ summary.size_human }}</li>
+    {% for kind, count in summary.kinds %}
+      <li>{{ count }} × {{ kind }}</li>
+    {% endfor %}
+    {% if summary.columns %}
+      <li>columns seen: {{ summary.columns | join(', ') }}</li>
+    {% endif %}
+    {% if summary.nested %}
+      <li>{{ summary.nested | join(', ') }} — archives inside the submission,
+        received and not opened</li>
+    {% endif %}
+  </ul>
+</section>
+
+<form method="post" action="/ui/jobs/{{ job_id }}/declaration">
+  <div class="field">
+    <label for="statement">Your responsibility and compliance statement</label>
+    <p class="hint" id="statement-hint">
+      In your own words. What the data is, where it came from, whether it
+      concerns people, what you may and may not publish, and anything a data
+      steward would need to know. There is no form to fill in because the
+      things that matter are rarely the ones a form anticipates.
+    </p>
+    <textarea id="statement" name="statement" rows="14" required
+              aria-describedby="statement-hint">{{ statement or '' }}</textarea>
+  </div>
+
+  <details>
+    <summary>What is useful to include</summary>
+    <ul>
+      <li>Whether it contains personal data, and of what kind.</li>
+      <li>The legal basis: consent, legitimate interest, public task.</li>
+      <li>Any ethics approval, and the body that gave it.</li>
+      <li>Whether anyone else holds rights in it.</li>
+      <li>Any embargo, and until when.</li>
+      <li>Whether it concerns Indigenous peoples or communities.</li>
+      <li>Anything identifying that would not be obvious to a reader — a role
+        held by one person, a place small enough to name someone.</li>
+    </ul>
+  </details>
+
+  <button type="submit">Continue</button>
+</form>
+{% endblock %}

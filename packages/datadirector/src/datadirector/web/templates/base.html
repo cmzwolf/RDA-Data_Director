@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Data Director{% endblock %}</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <a class="skip" href="#main">Skip to main content</a>
+  <header>
+    <nav aria-label="Main">
+      <a href="/ui/jobs">Your jobs</a>
+      <a href="/ui/submit">Submit data</a>
+
+    </nav>
+    {% if caller %}
+      <p class="who">
+        Signed in as <span class="orcid">{{ caller.orcid.value }}</span>
+        {%- if caller.roles %} · {{ caller.roles | join(', ') }}{% endif %}
+        <form method="post" action="/auth/logout" class="inline">
+          <button type="submit">Sign out</button>
+        </form>
+      </p>
+    {% endif %}
+  </header>
+
+  <main id="main">
+    {% if messages %}
+      <div role="status" class="messages">
+        {% for message in messages %}<p>{{ message }}</p>{% endfor %}
+      </div>
+    {% endif %}
+    {% if errors %}
+      {# Linked to the fields that caused them: an error summary a reader
+         cannot act on is decoration. #}
+      <div role="alert" class="errors">
+        <h2>There is a problem</h2>
+        <ul>
+          {% for field, message in errors.items() %}
+            <li><a href="#{{ field }}">{{ message }}</a></li>
+          {% endfor %}
+        </ul>
+      </div>
+    {% endif %}
+    {% block content %}{% endblock %}
+  </main>
+
+  <footer>
+    <p>An implementation of the RDA Data Director Agentic AI Blueprint v1.0.</p>
+  </footer>
+</body>
+</html>

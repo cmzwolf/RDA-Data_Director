@@ -31,6 +31,7 @@ class ConcurrentAppendError(DataDirectorError):
 
 
 class EventStore:
+    SERVES = ("R10", "C1", "C8", "C11", "C16", "P5")
     """One directory per job; one file per event.
 
     Files are named `{sequence:05d}-{unix_timestamp}.json`. The sequence comes

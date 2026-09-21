@@ -52,6 +52,15 @@ datadirector/             this cluster, EUPL 1.2
     engine.py         step sequencing, resumption, halting
 ```
 
+This is the cluster-1 surface. Later clusters added the rest of the tree -
+`runtime.py`, `pipeline.py`, `job_handle.py`, the `agents/` package with
+`registry.py`, `workflow/graph.py`, `workflow/definition.py` and
+`workflow/effects.py`, `state/` consumers, `probing/`, `content/`, `media/`,
+`exposure/`, `gate/`, `schemas/`, `validators/`, `vocabularies/`, `registries/`,
+`repositories/`, `dmp/`, `retention/`, `care/`, `conformance/`, `identity/`,
+`credentials/oauth.py`, `api/` and `web/` - and those are specified in their own
+cluster documents and in Document A §12b.
+
 ---
 
 ## 1. `errors.py`
@@ -60,18 +69,28 @@ datadirector/             this cluster, EUPL 1.2
 distinguishable by type rather than by message text.
 
 Root `DataDirectorError`. Subclasses: `ConfigurationError` (raised only at
-startup), `ChainIntegrityError` (tamper evidence failure), `PolicyHalt`
-(re-exported from contracts; no permitted backend), `AuthorityError` (an
+startup), `ChainIntegrityError` (tamper evidence failure), `AuthorityError` (an
 unconfirmed assertion was acted on), `PluginError`, `CredentialError`,
-`ExternalServiceError` (a plugin's remote dependency failed).
+`ExternalServiceError` (a plugin's remote dependency failed), and
+`ExtractionError` (a container refused: escape, link, or a limit exceeded),
+which arrived with cluster 2.
+
+`PolicyHalt` is deliberately *not* in this hierarchy. It lives with the contract
+it enforces, in `datadirector_contracts/policy.py`, and the PEP raises it from
+there — a plugin author catching it should not have to import the application to
+name the exception.
 
 **Invariant.** `ExternalServiceError` is always recoverable: the workflow pauses
 and resumes. `ChainIntegrityError` is never recoverable and must never be caught
 broadly; it means the audit record is untrustworthy and the operator must be
 told.
 
-**Tests.** Every error carries a message naming what to do next, per C7's
-graceful-failure clause. A test asserts no error class has an empty docstring.
+**Tests.** The failure modes are asserted by the modules that raise them: a
+hand-edited log raises `ChainIntegrityError`, a missing credential raises
+`CredentialError` naming the variable and never its value. Every class carries a
+docstring naming what to do next, per C7's graceful-failure clause, by
+convention rather than by check — there is no test that walks the hierarchy
+asserting docstrings.
 
 ---
 
@@ -97,8 +116,12 @@ one; credential references are variable *names*.
 the same configuration would hash differently on two machines and the
 reproducibility claim fails.
 
-**Tests.** Two structurally identical resolved configurations hash equally.
-A config containing something shaped like a secret is rejected.
+**Tests.** Two structurally identical resolved configurations hash equally
+(`test_resolved_config_hashes_stably`). Nothing rejects a config that merely
+*looks like* it contains a secret, because the type makes that unrepresentative
+rather than forbidden: `credential_env_vars` maps a scope to an environment
+variable **name**, and the `Secret` wrapper that would carry a value is tested
+for never printing itself and never surviving into a traceback.
 
 ---
 
@@ -115,8 +138,11 @@ the failure mode this module exists to prevent.
 **Key behaviour.** Emits a **startup capability report**: which Blueprint
 requirements the current configuration can satisfy, derived from installed
 plugin manifests (Document A §6.3). A deployment lacking a `DMPSource` says so
-rather than silently omitting R8. This report is also the machine-generated
-portion of the conformance matrix.
+rather than silently omitting R8. The conformance matrix in Appendix B is a
+separate, machine-checked artefact: `conformance/report.py` discovers components
+by importing the source tree and reconciles their `SERVES` declarations against
+what the matrix records, which is the check that would have caught the R8 row
+when it named plugins that had never been written.
 
 **Invariants.**
 - Policy naming a backend that wiring does not declare is a startup failure.
@@ -159,8 +185,17 @@ normal path (ADR-008).
 
 **Tests.** Crash simulation (write a partial temp file, then load) yields a
 valid log. Concurrent append from two processes: one succeeds, one raises.
-Hand-edited event file causes `load` to raise. A 10,000-event job loads within a
-stated time bound, so the file-backed choice is measured rather than assumed.
+Hand-edited event file causes `load` to raise, and a deleted event does too
+(`test_partial_write_leaves_the_log_valid`,
+`test_concurrent_append_is_refused_not_merged`,
+`test_hand_edited_event_file_is_detected`, `test_deleted_event_is_detected`). A
+test asserts the class exposes no delete, truncate or update operation
+(`test_store_exposes_no_mutation_operations`).
+
+There is **no load-time benchmark**. Nothing in the suite appends ten thousand
+events and times the read, so the file-backed choice is defended by argument
+about the deployment profiles it serves, not by measurement — which is why the
+C11 row in Appendix B.2 reads *Partial - architectural* rather than *Implemented*.
 
 ---
 
@@ -169,8 +204,13 @@ stated time bound, so the file-backed choice is measured rather than assumed.
 **Responsibility.** Reconstruct current `JobState` by folding events. This is
 the read model; the log is the write model.
 
-`JobState` carries: current step, classification, confirmed assertion sets,
-registered material references, pending proposals, halt reason if halted.
+`JobState` carries: current step, classification, registered material
+references, confirmed assertion sets, pending proposals, halt reason if halted,
+and the terminal state if one was reached. Three further fields exist because the
+workflow graph reads the fold rather than keeping its own copy of the truth:
+`seen_kinds` (which event kinds the log contains), `has_statement` (whether the
+depositor has said anything yet) and `config_digest`/`deposit_pid`, which are what
+`runtime.py` and the deposit path read.
 
 **Must not.** Persist anything. Projections are derived and disposable. If a
 projection is wrong, replaying fixes it; if projections were stored, they could
@@ -210,26 +250,36 @@ cannot disagree.
 PROV-O in JSON-LD.
 
 **Invariants.**
-- Default visibility is `RESTRICTED` (P3, P5).
+- An activity's own default visibility is `RESTRICTED` (P3, P5): recording
+  something openly is the deliberate act, not the default. `export` takes the
+  opposite default - `up_to` falls back to `OPEN` - so a caller that forgets the
+  argument gets the widest graph rather than the safest one, and every caller
+  that renders provenance for a person passes it explicitly.
+- Entities are referenced by identifier and digest; an activity whose artefact
+  description is long enough to be payload is refused at record time.
 - Export at `OPEN` contains no `justification_digest` dereferences and remains a
   valid, internally consistent graph.
 - Recording is synchronous with the action. An action that succeeded but was not
   recorded is a defect, not an acceptable degradation.
 
-**Tests.** Round-trip a graph through JSON-LD and compare. Export at each
-visibility level contains exactly the expected subgraphs. An activity carrying
-payload-shaped content is rejected.
+**Tests.** `test_export_omits_restricted_subgraphs` records one `OPEN` and one
+`CONFIDENTIAL` activity and asserts the OPEN export carries one activity and the
+CONFIDENTIAL export both. A non-auditor read of the restricted store raises
+rather than returning empty (`test_restricted_store_refuses_non_auditor`). An
+activity carrying payload-shaped content is rejected at record time.
 
 ---
 
 ## 7. `provenance/restricted.py`
 
 **Responsibility.** Store free-text justifications that must not enter the open
-record, keyed by activity id, retrievable only by the auditor role.
+record, keyed by activity id, retrievable only by an auditor role.
 
 **Key behaviour.** `put` returns a digest and stores the text. `get` requires a
-role assertion. Presenting the text later and recomputing the digest proves it
-is the original, which is sufficient under tamper evidence (ADR-007).
+role assertion, and the permitted set is a named constant -
+`AUDITOR_ROLES = {"auditor", "data-steward"}` - rather than a string compare
+scattered through callers. Presenting the text later and recomputing the digest
+proves it is the original, which is sufficient under tamper evidence (ADR-007).
 
 **Invariants.** The store is append-only like everything else. A digest recorded
 in the chain must always resolve, so entries are never deleted; retention
@@ -244,10 +294,14 @@ recomputation matches after retrieval.
 
 **Responsibility.** The single choke point for model access (Document A §9.4).
 
-**Key behaviour.** `resolve_backend(classification)` returns the most
-restrictive permitted backend for the current classification, or raises
-`PolicyHalt`. Every resolution is recorded as a provenance activity: which
-classification, which backend, which residency.
+**Key behaviour.** `resolve_backend(classification, capability=TEXT_GENERATION,
+*, prefer=None)` returns the most restrictive permitted *and capable* backend, or
+raises `PolicyHalt`. The steps run in one order and the order is the security
+property: policy filters which backends may see the material, capability filters
+which of those can do the job, a depositor's preference can only *narrow* what
+survives those two, and residency then orders the remainder. Capability is a
+filter, never a selector. Every resolution is recorded as a provenance activity:
+which classification, which backend, which residency.
 
 **Must not.** Offer any way to name a backend directly. Fall back to a
 less-appropriate backend when the preferred one is unavailable — that is a halt,
@@ -256,15 +310,22 @@ not a degradation.
 **Invariants.**
 - `resolve_backend` is total over `SensitivityClass`: config validation
   guarantees a decision exists for every class, so there is no undefined case.
-- The PEP holds the only references to backend credentials. Plugins never do.
-- `ModelRequest` construction happens here, not in agents, which is why the type
-  has no backend field.
+- The PEP is the only route to a model backend: it is constructed with the
+  deployment's backends and releases one only after policy has decided. Credential
+  values stay in the `CredentialBroker`, which backends and plugins consult at
+  call time and which never yields a raw secret.
+- `ModelRequest` has no backend field, because a request only exists after the
+  backend has been resolved by policy. Agents assemble the request - `system`,
+  `user_content` and `trusted_instructions` in structurally distinct positions -
+  and the backend arrives as the return value of `resolve_backend`, never as a
+  field the caller fills in.
 
 **Tests.** `sensitive` with only a remote backend configured raises `PolicyHalt`
 and the message names the missing residency requirement. Each resolution
-produces exactly one provenance activity. A test asserts by introspection that
-no public method accepts a backend name — the guarantee is structural, so the
-test checks the structure.
+produces exactly one provenance activity, and the resolved set accumulates for
+the deployment (`models_used()`). A test asserts by introspection that no public
+method accepts a backend name — the guarantee is structural, so the test checks
+the structure (`test_pep_exposes_no_method_naming_a_backend`).
 
 ---
 
@@ -350,10 +411,18 @@ byte-identical. Missing model tag fails at startup with the installed list.
 **Responsibility.** Sequence steps, halt, resume, compensate.
 
 **Key behaviour.** A step is a named unit with a precondition on `JobState`.
-The engine selects the next runnable step, executes it, and appends the
-resulting events. Resumption is: load, fold, select, continue. There is no
-in-memory session, which is what makes a job started Monday resumable Thursday
-by a different person.
+The engine selects the next runnable step among the steps it was given, executes
+it, and appends the resulting events. Resumption is: load, fold, select,
+continue. There is no in-memory session, which is what makes a job started Monday
+resumable Thursday by a different person.
+
+What decides *which* steps exist, and in what order they become runnable, moved
+out of this module into `workflow/graph.py` and `workflow/definition.py`: the
+graph declares nodes, their conditions and their requirement coverage, and
+`pipeline.py` supplies the engine with the steps the graph says are runnable.
+`workflow/effects.py` records an intent before an external effect runs and
+reconciles an interrupted attempt rather than repeating it. The engine kept its
+halt, retry and compensation semantics; it no longer owns the workflow definition.
 
 **Must not.** Hold workflow state in memory across calls. Retry a step that
 produced a partial external effect without a compensating event first.
@@ -406,17 +475,23 @@ Not in this cluster: any agent, any repository driver, any user interface, the
 core API resource model, or container extraction. The last of these belongs with
 ingestion in cluster 2, but note that its safety rules (§8.4, §14 of Document A)
 are refusals rather than best-effort checks, and the `ExtractionLimits` defaults
-in the contracts package are already set to refuse symlinks, absolute paths and
-nesting. The last of these stays deferred until the Zenodo
-driver exists, for the reason recorded in Document A §13.
+in the contracts package already refuse symlinks and absolute paths
+(`allow_symlinks = False`, `allow_absolute_paths = False`) and cap members, total
+uncompressed bytes and nesting depth. Nesting is the one limit that *reports*
+rather than refuses: `nested_members` returns the archives inside the archive so
+ingestion can register them as material received and not opened, which is
+honest about what was looked at. The core API resource model stayed deferred
+until the Zenodo driver existed, for the reason recorded in Document A §13.
 
 ---
 
 ## Open question carried into cluster 2
 
 The file-backed store is right for the single-user and small institutional
-profiles. The 10,000-event load benchmark above exists to tell us where it stops
-being right, so that the C11 scalability row in the conformance matrix rests on a
-measurement rather than an assertion. If the number is poor, the fix is an index
-file rather than a database, and that decision belongs in cluster 2 once we have
-the figure.
+profiles. What would tell us where it stops being right is a load-time benchmark,
+and that benchmark **has not been written** - the claim that it existed was
+removed from §4 when the suite was checked against this document. Until someone
+appends ten thousand events and times the read, the C11 scalability row in the
+conformance matrix rests on argument rather than measurement, and says so. If
+the figure turns out to be poor, the fix is an index file rather than a database,
+and that decision belongs with whoever has the figure.

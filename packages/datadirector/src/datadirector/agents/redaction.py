@@ -53,14 +53,21 @@ open register and quoting would move the content into it.
 Return ONLY a JSON object:
 {"proposals": [{"location": "field name or span", "treatment": "...",
                 "reason_code": "...", "evidence": "why this location"}]}
-"""
+                """
 
 _TREATMENTS = {t.value: t for t in Treatment}
 _REASONS = {r.value: r for r in ReasonCode}
 
 
-class RedactionAgent:
+from ..gate.items import from_redaction_proposals
+
+from .base import Agent, Capabilities, Invocation, Outcome
+from .registry import AgentContext, register_agent
+
+@register_agent
+class RedactionAgent(Agent):
     name = "redaction"
+    serves = ("C2",)
     version = "0.1.0"
 
     @property
@@ -128,3 +135,35 @@ class RedactionAgent:
                 evidence=str(raw.get("evidence", "unstated"))[:400],
             ))
         return out
+
+    @classmethod
+    def build(cls, context: AgentContext) -> "RedactionAgent":
+        return cls(context.pep)
+    @classmethod
+    def capabilities(cls) -> Capabilities:
+        return Capabilities(
+            name="redaction",
+            summary=("proposes redactions from findings already established, "
+                      "as questions a person resolves"),
+            needs_backend=ModelCapability.TEXT_GENERATION,
+            human_follows=True,
+            inspects_material=True,
+            serves=("C2",))
+    def run(self, invocation: Invocation) -> Outcome:
+        """Propose redactions, and own nothing.
+        The proposals are the agent's, and they say so on the log; they
+        become decisions only when a person resolves them. Nothing here
+        redacts, marks or removes - the agent reports what it would redact
+        and why, and the handle keeps the log writes out of its reach.
+        """
+        handle = invocation.job
+        state = handle.state
+        artefacts = list(handle.material()) if state.material else []
+        findings = [f"{a}: classified {state.classification.level.label}"
+                    for a in artefacts]
+        proposals, decision = self.propose(
+            state, artefacts[0] if artefacts else "", findings)
+        return Outcome(job_id=handle.job_id,
+                        gate_items=from_redaction_proposals(proposals),
+                        decision=decision,
+                        message=f"proposed {len(proposals)} redactions")

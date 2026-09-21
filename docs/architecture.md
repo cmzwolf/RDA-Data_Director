@@ -457,7 +457,7 @@ action. It does not, and cannot, make that human right.
 ```mermaid
 graph TB
     subgraph PRES["Presentation"]
-        UI["Web interface<br/>(structured workflow + chat)"]
+        UI["Web interface<br/>(structured workflow)"]
         CLI["Command-line interface"]
     end
     subgraph API["Core API"]
@@ -484,7 +484,7 @@ graph TB
         WRK["Working area (ephemeral)"]
         RES["Restricted store"]
     end
-    EXT["External services<br/>Zenodo · OLS · FAIRsharing · DataCite"]
+    EXT["External services<br/>Zenodo · ORCID · OLS · re3data"]
 
     PRES --> API --> ORCH
     ORCH --> GOV
@@ -514,11 +514,58 @@ structural, not a convention that developers are asked to observe.
 Two contract surfaces exist, and conflating them would be an error.
 
 The **core API** is the external surface: a REST API described by an OpenAPI
-descriptor. It is versioned and stable. This is the candidate answer to Blueprint
-requirement C5, which states that all Data Director instances must expose a
-harmonised API to enable interaction between instances, but which does not
-specify that API. Because no such specification exists, ours is offered as a
-starting point for community discussion rather than as an authoritative reading.
+descriptor generated from the same types the runtime validates against. It is
+the candidate answer to Blueprint requirement C5, which states that all Data
+Director instances must expose a harmonised API to enable interaction between
+instances but does not specify that API. Ours is offered as a starting point for
+community discussion rather than as an authoritative reading.
+
+Document A deferred the resource model until after contact with a real
+repository, and that deferral earned its keep. Two properties of the deposit
+lifecycle were not evident from the specification and are visible in the design:
+a deposit has a **long, resumable middle**, because the repository holds a draft
+indefinitely and validates only at publication; and **publication is the only
+irreversible transition**. So job state is something to poll and act on rather
+than the return value of a blocking call, and deposit is the one operation whose
+idempotency is spelled out in the contract.
+
+Four rules shape the surface.
+
+**Reads are projections.** Every GET folds the event log, so polling is safe, a
+client may disappear for a week, and two clients see the same thing. Gate items
+live in the log for the same reason: an approval surface that forgot its items
+on restart would make the human gate the least durable part of a system built
+around durability.
+
+**Human acts are authenticated and singular.** Confirming, resolving and
+depositing require an identified ORCID, and none accepts a list. There is no
+endpoint that resolves several gate items at once, because a client that could
+do so has reviewed nothing — the same contract the gate itself keeps (§9.7).
+
+**The irreversible operation says so.** Deposit requires an explicit
+acknowledgement, and repeating it returns the existing identifiers rather than
+creating a second record, which is the failure the Zenodo driver was corrected
+for.
+
+**The root answers whoever is at it.** A Data Director discovering another
+instance and a researcher typing the address both have a claim on `/`, and the
+API held it: opening the service in a browser handed you a JSON object. The root
+now negotiates on `Accept` — a page for a browser, the service description for a
+client asking for JSON — and the description also has an unambiguous address at
+`/api` for a client that would rather not argue about headers. Negotiation
+rather than a redirect, because a root that sends people elsewhere makes the
+address they share the wrong one.
+
+**Capability discovery is unauthenticated, and is the point.** Two instances
+cannot usefully exchange work without first establishing what the other accepts:
+which schemas it emits, which repositories it can reach, and — as a precondition
+rather than a detail — where it would process the material. An instance that
+required a credential in order to say what it accepts could not be discovered by
+one that had not yet been given a credential, which would make C5's
+inter-instance interaction impossible to bootstrap. The response is derived from
+the conformance report (§B.5) rather than written, because a hand-maintained
+statement of what an instance can do is one nobody checks, and this one is read
+by other instances deciding what to send.
 
 The **internal contracts** are the plugin protocols. They are Python interfaces,
 not web services. Requiring every plugin to be a network service would make a
@@ -548,8 +595,10 @@ not call another agent directly.
 |---|---|---|---|
 | **Ingestion** | Detects new material, registers it, computes hashes, extracts structural profile | No | (input to all) |
 | **Declaration** | Parses the responsibility statement, extracts structured claims for human confirmation | Yes | C2, §5.2 |
-| **Classification** | Assesses sensitivity of the material, proposes redactions | Yes | C2, P3 |
-| **DMP** | Extracts commitments from a Data Management Plan; verifies the prepared deposit against them | Sometimes | R8 |
+| **Classification** | Assesses sensitivity of the material, with model-directed probing | Yes | C2, P3 |
+| **Media** | Inspects non-textual material: deterministic metadata, then a vision tier where policy permits it, then an explicit "not inspected" state | Deterministic first; model only where a permitted backend declares vision | C2, P3 |
+| **Redaction** | Proposes redactions from findings already established, as gate items a person resolves per item | Yes | C2 |
+| **DMP** | Extracts commitments from a Data Management Plan; verifies the prepared deposit against them | Yes for a prose plan; no for a machine-actionable one, whose fields are read directly | R8 |
 | **Repository** | Recommends and confirms a target repository | Yes | R1 |
 | **Metadata** | Generates the metadata record; selects schema and vocabularies | Yes | R2, R3, R6 |
 | **Documentation** | Drafts README file and data dictionary | Yes | R5 |
@@ -557,8 +606,14 @@ not call another agent directly.
 | **Publication** | Executes deposit through a repository driver | No | R7 |
 | **Provenance** | Records every action as PROV-O; maintains the hash chain | No | R10, P5 |
 
-Four of ten agents use no model at all, and one (DMP) uses one only for some of its
-plugins. This is why the definition of "agent" in
+Eleven agents register themselves with the registry and are built by the
+composition root; the provenance recorder is listed here because the Blueprint
+counts it as a component, and treated in code as deterministic middleware that no
+model may enter (ADR-009). Of the eleven, three call no model at all — ingestion,
+validation and publication. The media agent calls one only where policy permits a
+vision-capable backend, and the DMP agent calls one only for a prose plan, because
+a machine-actionable plan has structured fields that should be read rather than
+interpreted. This is why the definition of "agent" in
 §2.3 is deliberately broad: the uniform treatment is what allows the provenance
 recorder to be an agent in the architectural sense while being entirely
 deterministic in operation, which is essential because non-deterministic audit
@@ -575,9 +630,9 @@ singular.
 | `RepositoryDriver` | Deposit to one repository: authentication, pre-flight checks, upload, PID retrieval | Zenodo |
 | `SchemaProfile` | Emit and validate one metadata standard | DataCite; RO-Crate |
 | `VocabularyProvider` | Search one terminology service | Ontology Lookup Service (OLS) |
-| `ValidatorDriver` | Check a record against one validation technology | JSON Schema; SHACL |
-| `ModelBackend` | Provide access to one language model endpoint | Local (Ollama); remote API |
-| `RegistryDriver` | Query one registry of repositories or standards | FAIRsharing; re3data |
+| `ValidatorDriver` | Check a record against one validation technology | JSON Schema (`validators/jsonschema_driver.py`). SHACL is **not implemented**: the row this occupies in Appendix B.1 reads Partial for that reason, and the reference to it elsewhere in this document is a design intention, not a component |
+| `ModelBackend` | Provide access to one language model endpoint | Local (Ollama); remote (Anthropic). `kind` is the discriminator, so a further provider is a new module and a config entry with no change to the PEP |
+| `RegistryDriver` | Query one registry of repositories or standards | re3data (`registries/re3data.py`). FAIRsharing is **not implemented**; the registries named in ADR-010's argument are the ones a deployment can actually install, and only re3data is |
 | `DMPSource` | Read commitments from one Data Management Plan source | Document (link to text or PDF, model-extracted); maDMP (machine-actionable, deterministic); fixture (mock plans, for testing) |
 | `IdentityProvider` | Authenticate a human | ORCID |
 | `ContainerFormat` | Detect and safely unpack one archive format | zip; tar; BagIt; RO-Crate |
@@ -673,6 +728,93 @@ in-memory object graph. Serialised object graphs execute arbitrary code when
 loaded, cannot be inspected or diffed, break when the code is refactored, and
 capture whatever happens to be reachable including credentials and payload. Every
 one of those is disqualifying here (ADR-015).
+
+#### Recovering an interrupted step
+
+The event log records what happened, which leaves one thing it cannot express:
+whether something *is happening*. A crash during a step is indistinguishable
+from a step never attempted, because both look like an absent completion.
+
+For internal work that costs nothing — recompute and carry on. For a step with
+an effect outside this system it is the difference between a dataset published
+once and published twice. A process that dies after a repository accepts an
+upload but before the completion is written leaves a log saying "not deposited",
+and a resume that trusts the log deposits again.
+
+So a step with an external effect writes an **intent** before acting and an
+**outcome** after. The intent carries the kind of effect, the target, and an
+**idempotency key** that is stable across retries of the same logical attempt
+and distinct between different ones — stable, because two retries the service
+cannot tell apart is how duplicates are made; distinct, because two different
+attempts sharing a key is how one silently replaces the other.
+
+On recovery, an intent with no outcome is **not retried**. It is reconciled: the
+external service is asked, through a prober the component that owns the
+relationship supplies, whether that attempt took effect. Only that component
+knows how to ask, and one performing an external effect while offering no way to
+check it leaves recovery with nothing but a guess.
+
+Reconciliation has three answers, and the third is the one that matters. It may
+find the effect took place, that it did not, or that it **cannot tell** — because
+the service is unreachable, or because no prober exists for that kind of effect.
+An unasked question and a negative answer must not look alike, which is the same
+rule the inspection tier keeps (§9.5). An indeterminate attempt is therefore not
+settled by the system at all: it becomes a gate item, deposit is blocked, and a
+person decides. Guessing here is how a dataset is published twice or silently not
+at all.
+
+This began as a private mitigation inside the Zenodo driver, which recorded its
+deposition identifier and checked whether the record was already published. That
+worked and did not generalise: a third party writing their own repository driver
+would have had to rediscover the problem, and nothing in the protocol would have
+told them to. It is now a framework contract, and the driver's version is one
+implementation of it.
+
+One smaller gap in the same family remains open: a retried model call charges
+the exposure budget twice, which is arguably correct but means repeated crashes
+can exhaust it.
+
+#### Deleting working material
+
+Working copies are class-1 material and are meant to be deleted once a deposit
+is published. One fact governs how: **our working copy may be the only copy.**
+Ingestion copies from the watched folder, and a researcher who then clears their
+own folder has nothing else. Deleting on a guess does not free disk, it loses
+data.
+
+Eligibility is therefore derived from the event log rather than from the
+filesystem. A modification time describes a file, not a job: work left at an
+approval gate for three weeks is idle, not abandoned, and the difference is
+invisible from outside. Four categories follow, and only the first is ever
+removed by a schedule.
+
+| Category | Evidence | Treatment |
+|---|---|---|
+| Released | a deposit completed with an identifier | Deletable, once survival is confirmed |
+| Closed, not shared | a deliberate decision not to publish | Never automatic: nothing else holds it |
+| Idle | a live job, long silent | Reported only |
+| Unattributed | a directory with no job | Reported only |
+
+**Belief is not evidence.** A persistent identifier in our log records what we
+think happened; asking the repository records what is true. A withdrawn record
+turns a safe deletion into a permanent loss, so the check is made, and an
+unreachable repository yields "cannot tell" rather than either answer. Automatic
+deletion requires the category to permit it *and* positive confirmation that the
+material survives elsewhere.
+
+**Deletion happens in two phases.** A candidate is marked with a tombstone
+carrying the reason, the schedule and an explanation, and removed only after a
+grace period. Removing the tombstone cancels the deletion, so returning to the
+work is enough to keep it, and an unreadable tombstone means "not marked" rather
+than "delete". Deletion itself is an external effect and is bracketed by the
+intent machinery above, because a crash part-way through leaves a partially
+removed directory that nothing would otherwise record. What was removed is
+recorded as digests and counts, never content — the same discipline the
+provenance graph keeps.
+
+The command reports by default and acts only with `--apply`, because a cleanup
+that deleted on a first exploratory run would be the failure the whole design
+avoids.
 
 ### 7.3 The three classes of material
 
@@ -853,6 +995,18 @@ requires any agentic output to carry.
 
 A **Data Management Plan (DMP)** is a document, usually required by a funder at
 grant application, describing how a project will manage and share its data.
+
+> **This section was written as design, and the design was then built.** The
+> components are `agents/dmp.py` (`DmpAgent`: `read()` extracts a commitment set,
+> `verify()` compares the prepared deposit against it), `dmp/sources.py`
+> (`MaDmpSource`, `DocumentDmpSource`, `FixtureDmpSource`), `dmp/detect.py` (which
+> recognises a plan among the submitted material and raises a gate item rather than
+> silently adopting it), the `dmp` node in the workflow graph, and the discrepancy
+> items the pipeline raises from them. Appendix B.5 records why this section once
+> carried the opposite note - a matrix row claimed the feature was implemented
+> while nothing in the tree provided it, and the honest correction over-corrected
+> into describing built components as unbuilt. Read the row, not the margin note.
+
 Requirement R8 asks that the system verify, at the point of publication, that what
 is being deposited matches what the plan committed to.
 
@@ -1433,7 +1587,154 @@ tighten the classification independently of whatever verdict the model returns
 overall, and an unreadable reply is recorded as *not inspected* rather than as a
 clean result.
 
-### 9.6 The approval gate
+### 9.5b The interface at the gate
+
+The interface is server-rendered HTML over the same service layer the core API
+uses, so anything it can do another Data Director can do (C5). The reasoning for
+HTML rather than a client application is in the cluster 5 specification;
+briefly, C6 asks for WCAG 2.1 AA and forms are accessible before anyone works on
+them, whereas a client application is accessible after sustained effort that
+stays invisible until someone tries a screen reader.
+
+The declaration is a **second screen**, after upload rather than alongside it,
+so the profile can be shown before the question is asked. A statement written
+with "three CSVs and forty images" in view is about the material; one written
+blind is about the researcher's memory of it.
+
+It asks for prose, not a form. The things that matter — a role held by one
+person, a place small enough to name someone, a consent that excluded quotation
+— are rarely the ones a form anticipates. A collapsed list of what is useful to
+include sits beside the box.
+
+The statement is recorded verbatim before it is parsed, so it survives
+independently of what was made of it: if the reading is wrong, the evidence of
+what was actually said is still there, and a model that cannot be reached loses
+nothing.
+
+Confirmation is then a separate screen showing what the statement was read as
+saying, with **stated and inferred sensitivity distinguished** and the
+indicators that produced any inference listed beneath it. Claims are confirmed
+individually, nothing is preselected, and leaving the level alone applies the
+most restrictive reading — an absent statement is not a statement that the data
+is open.
+
+The way in is a submit page: an upload, an optional instruction in the
+researcher's own words, and an optional plan reference. The instruction field
+states the trust boundary plainly — what a researcher types carries directive
+authority, the same sentence inside one of their files carries none — because
+someone who does not know that cannot reason about why their deposit went where
+it did. The page also lists what the installation cannot do, before the
+researcher commits their time rather than after.
+
+Submission goes through the same pipeline as the command line. A second route
+into ingestion would be a second place for the rules to be applied differently.
+
+**The record is not the page.** An early history view rendered event kinds and
+payload dictionaries directly — `declaration.parsed by declaration/0.1.0`, then
+`authority: proposed` and a Python repr of the claims. That is a log file in a
+browser: legible to whoever wrote the event and to nobody else, and the readers
+it most needs to serve, a researcher deciding whether to publish and an auditor
+two years later, are precisely those who cannot read it.
+
+Events are therefore narrated. `declaration.parsed` becomes "we read your
+statement"; the indicators behind an inference become "because: date of birth
+(unique personal identifier)". Digests, agent versions and authority states stay
+in the log, where someone who wants them will look, and off a page someone is
+reading in order to decide something.
+
+**Buttons act; links navigate.** They were visually identical, so a reader could
+not tell which would change something. Buttons are filled and carry a verb;
+links are underlined text; the one link that is a page's primary action is
+outlined rather than filled, so it does not claim to act. Publishing is styled
+differently again, because an irreversible action that looks like every other
+action says it is ordinary.
+
+Link text names what it opens. Six identical "what happened" links told a reader
+nothing about which of the six they were choosing, and offered a link even where
+nothing had happened. A phase with no events and no current activity offers no
+link at all: a link to an empty page is a promise of content that is not there.
+
+The job page leads with **what is happening and what the person must do**.
+Ownership is real and rarely urgent, so it is collapsed rather than occupying
+the space above the job's own state — asking on every screen who else should
+have access is a question nobody arrived with.
+
+A job is shown as a **sequence of named phases**, not as a percentage. Steps are
+conditional — a submission with no images never runs media inspection — so a
+completion figure would be invented. Phases are named for what happens rather
+than for the agent that does it: "working out what is sensitive" is something a
+researcher understands, "classification" is the name of a component.
+
+**A halted job must not resemble a waiting one.** Each phase carries its state
+in words as well as in styling, and a phase that recovered after failed attempts
+says so, because a job that retried twice is not a job that ran cleanly and only
+the record distinguishes them. A phase passed without evidence is marked
+*skipped* rather than *done*: "did not apply" and "ran and found nothing" are
+different, and only one of them inspected anything.
+
+Each phase links to the history **filtered to that phase**. "What happened
+during classification?" is the question a person has, and a flat log of forty
+entries does not answer it.
+
+An owner can **continue** a job, or **try again** where it halted. It is a POST
+rather than a link, because a GET that changed state would run on every refresh
+and on every URL a browser chose to prefetch. A halted job says what stopped it
+beside the button, since retrying is worth doing when the cause was temporary
+and a person cannot judge that without being told. The control is not shown to
+an auditor: a button someone cannot use teaches them the interface is broken.
+
+The gate screen is the reason the interface exists, and most of its design is
+what it withholds. There is no select-all, no "approve remaining", and no
+preselected decision: a default is a recommendation, and the system does not get
+to recommend what a person should decide. Each item is its own form posting to
+its own path, so one request carries one decision.
+
+Each item shows the evidence beside the proposal, a field-level diff where a
+value would change — "redact column 3" is not reviewable; showing what a value
+is and what it would become is — and, where the finding rests on a presumption,
+says so in words rather than by styling, because styling is invisible to a
+screen reader and to anyone who does not perceive the colour. A CARE referral
+renders no approval control at all.
+
+**Display is recorded, not only decision.** §4.1 claims rubber-stamping is
+detectable from approval latency, and that claim only holds if there is an
+interval to measure. A `gate.items-displayed` event is appended when items are
+put in front of someone who could act on them — and only then: an auditor
+looking at the gate is not reviewing for approval, and counting their view would
+open an interval no decision will ever close.
+
+### 9.6 CARE: detection and referral
+
+Requirement R2 names the CARE Principles for Indigenous Data Governance —
+Collective Benefit, Authority to Control, Responsibility, Ethics — alongside
+FAIR. The Blueprint is explicit about how far a tool may go: §10.3 states that
+CARE compliance cannot be assessed by checklist, and that the minimum useful
+contribution is to identify when CARE is likely to apply and direct the user to
+guidance.
+
+The system therefore detects and refers, and assesses nothing. An automated
+CARE assessment would be a category error rather than merely an overreach: the
+principles vest authority in the peoples and communities concerned, so a system
+deciding on their behalf would violate the principle it claimed to be checking.
+The `CareAssessment` type carries no verdict, score or compliance flag, and a
+test asserts it never gains one.
+
+Detection is deterministic and keyword-based. A model asked to judge CARE
+applicability would be performing the assessment this design exists to avoid,
+and its output would carry an authority it has no standing to hold; a keyword
+match claims nothing beyond "this word appeared". Signals are drawn from
+identity terms, traditional and community knowledge, governance and consent
+language, and culturally significant places. A depositor's own declaration
+outweighs the absence of signals.
+
+Where CARE may apply, a **referral becomes a gate item** and deposit is blocked
+until a person acts on it. The permitted decisions are deliberately narrow:
+*consulted*, *not applicable*, or *exclude from deposit*. There is no *approve*,
+because approving would imply the tool had judged something. Recording a
+consultation requires naming who was consulted and what they said — without
+that, the record shows only that the referral was dismissed.
+
+### 9.7 The approval gate
 
 Everything awaiting a human decision — uninspected files, redaction proposals,
 declaration and DMP discrepancies — is collected into one reviewable set.
@@ -1456,7 +1757,7 @@ person accepting responsibility for material that was never examined, and the
 record should say so rather than showing an approval indistinguishable from one
 made on evidence.
 
-### 9.7 Redaction proposals
+### 9.8 Redaction proposals
 
 Where sensitive content is found, the system assists with its removal. This
 requires care, because Blueprint C2 states the tool must not attempt anonymisation
@@ -1512,18 +1813,100 @@ Note a limitation: institutional affiliation recorded in an ORCID profile is
 self-asserted. It is evidence, not proof, and cannot be the basis for
 authorisation.
 
-**Authorisation: what this person may do here.** Held locally, not derivable from
-ORCID. Four roles suffice for this version:
+**Authorisation: what this person may do here.** Held locally, not derivable
+from ORCID, and expressed as **ownership** rather than as a role hierarchy.
 
-| Role | May |
-|---|---|
-| **Researcher** | Own a job; approve their own metadata; deposit |
-| **Data steward** | All of the above on behalf of a researcher; override AI outputs (C14) |
-| **Administrator** | Manage wiring configuration; install plugins. **No workflow authority** |
-| **Auditor** | Read everything, including the restricted provenance partition. Change nothing |
+A job belongs to its creator. An owner may add further owners, by ORCID, whether
+or not that person has ever signed in. **No one is ever removed.**
 
-The separation of administrator from workflow authority is deliberate: whoever can
-reconfigure the system should not also be able to approve deposits with it.
+Append-only ownership removes an entire layer. Revocable rights need arbitration
+— who may remove whom, what happens to work in progress, which administrator
+adjudicates — and none of that exists here. It is the same shape as the event
+log, applied to access. It also removes a presumption: an earlier draft gave a
+data steward standing rights over work they had never been invited to, which is
+convenient and somewhat high-handed. A steward is now added by the researcher,
+and that addition is a recorded human act.
+
+| Capability | Owner | Auditor | Administrator |
+|---|---|---|---|
+| See a job | if they own it | any job | no |
+| Act on a job | yes | **no** | no |
+| Add an owner | yes | no | no |
+| Manage configuration and plugins | no | no | yes |
+
+**The instance belongs to no one.** The ORCID application credentials identify
+the *installation* to ORCID, not a person: they are the same whether one
+researcher uses the deployment or two hundred. Every visitor signs in as
+themselves, the callback returns their identifier, and the session store holds
+one entry per session. A landing page at `/` — the only unauthenticated page —
+says so, because a visitor thrown straight at an identity provider they did not
+ask for has been told nothing about what they are signing into.
+
+**For development, a deployment may read accounts from a file instead.** Several
+people sign in, each as a distinct identifier, which is what the workflow needs
+to be exercised at all: ownership, delegation and the auditor role all require
+more than one person. Requiring an ORCID application, and HTTPS with it, before
+an ingestion can be debugged is the wrong order to do things in.
+
+These identities are asserted, not proven, and the system says so in the three
+places it matters: the sign-in page, the landing page, and the session itself,
+which records `authentication: local-accounts`. That last is not a security
+measure — the file is on someone's own machine and there is nothing there to
+defend — but bookkeeping: provenance records from a development run must remain
+distinguishable from records made by a real researcher, or the archive quietly
+acquires fiction. Refused outside the local and institutional profiles, where
+passwords in a text file would be a different proposition entirely.
+
+The local `datadirector session` command is a narrower version of the same
+thing: naming an ORCID on a command line means the operator decides who exists,
+which inverts the model. It is for a laptop with a single user, and its output
+says so.
+
+**Sign-in is implemented and unverified.** The ORCID provider performs a real
+authorisation code flow against real endpoints; nothing in it is stubbed. But
+its tests stub the token endpoint, so they check our half — single-use state,
+the identifier taken from the exchange and never from the request, cookie flags,
+immediate revocation — and have never contacted ORCID. That is the position the
+repository driver was in before it was run against the sandbox, and that run
+found five divergences between what we believed the API did and what it does.
+`tests/live/test_orcid_live.py` covers what can be checked without a person
+consenting in a browser; the consent step itself is not automatable.
+
+Where the exchange cannot be completed at all — the ORCID sandbox is not always
+able to issue tokens — a session can be issued from the machine with
+`datadirector session`. This is an impersonation tool and is confined
+accordingly: a command and never a route, so it cannot be reached over the
+network; refused outside the single-user local profile, where the person at the
+keyboard is the only user and already controls the process; and recorded, so a
+session that did not come from ORCID is distinguishable in the log from one that
+did. A test asserts that the ORCID callback is the only place in the web
+package that issues a session, because the profile check would otherwise be
+decoration.
+
+The **auditor** reads without owning, because an audit that could only see work
+it had been invited to would not be an audit. It grants nothing else, and an
+auditor's reading is itself recorded: a role whose use is invisible is an
+unlogged back door with a respectable name.
+
+The separation of administrator from workflow authority remains, and is now
+sharper: an administrator has no route to a job at all. Whoever can reconfigure
+the system cannot read or approve with it.
+
+**When the last owner leaves.** A researcher moves institution and their ORCID
+is the sole owner of a job. Nobody can be removed, so nobody can be added, and
+the job becomes **auditable but not actionable**: readable for accountability,
+workable by no one.
+
+This is the intended outcome rather than a gap. The alternative — an
+administrator granting themselves ownership — is a back door created for a rare
+case and available in every other. Placing the obligation on the person leaving
+makes it a policy problem with a policy owner. The interface accordingly owes a
+researcher one list nobody can assemble for them: the jobs where they are the
+only owner.
+
+A job the caller does not own returns **404 rather than 403**, because a 403
+confirms the job exists, and for a system holding sensitive material existence is
+itself a disclosure.
 
 **Delegation: acting in an external system on the user's behalf.** Repository
 credentials are obtained per user, per repository, by OAuth authorisation code
@@ -1560,32 +1943,64 @@ Both are declarative, both are held under version control, and both are validate
 against declared schemas at startup so that an invalid configuration fails
 immediately rather than mid-workflow.
 
-Illustrative shape:
+Illustrative shape - the two real files are `config/wiring.example.yaml`
+and `config/policy.example.yaml`, and these are their actual field names:
 
 ```yaml
+# wiring: the administrator's surface
+profile: single-user-local
+storage:
+  state_root: ./var/state
+  working_root: ./var/work
+  restricted_root: ./var/restricted
+  watched_folder: ./var/deposit
 backends:
-  local-mistral: {kind: ollama, endpoint: "http://localhost:11434", residency: on-premise}
-  eu-hosted:     {kind: openai-compatible, endpoint: "https://...", residency: eu}
-  remote-api:    {kind: anthropic, residency: extra-eu}
-
-policy:
-  backend_by_sensitivity:
-    public:    [local-mistral, eu-hosted, remote-api]
-    internal:  [local-mistral, eu-hosted]
-    sensitive: [local-mistral]
-  on_no_permitted_backend: halt        # never: degrade
-  oversight:
-    metadata_generation: human-in-the-loop
-    post_deposit_monitoring: human-on-the-loop
-
-agents:
-  classification: {backend: "@most_restrictive_permitted"}
-  metadata:       {backend: "@most_restrictive_permitted", plugins: [datacite-profile, ols-vocab]}
-  publication:    {plugins: [zenodo-driver]}
+  - name: local-qwen
+    kind: ollama
+    endpoint: http://localhost:11434
+    model: qwen3.8:27b-mlx              # declared, never guessed from the name
+    residency: on-premise
+    capabilities: [text-generation, structured-output, vision]
+  - name: remote-claude
+    kind: anthropic
+    model: claude-sonnet-4-5
+    residency: extra-jurisdiction
+plugins:
+  - name: zenodo
+    enabled: true
+    settings: {base_url: https://sandbox.zenodo.org}
+credential_env_vars:                     # variable NAMES, never values
+  zenodo:deposit: DD_ZENODO_TOKEN
+  anthropic:api: DD_ANTHROPIC_API_KEY
 ```
 
-The indirection `@most_restrictive_permitted` is the mechanism by which agents are
-prevented from naming backends (§9.4).
+```yaml
+# policy: the data steward's surface
+backend_by_sensitivity:
+  public:         [local-qwen, remote-claude]
+  internal:       [local-qwen]
+  sensitive: [local-qwen]
+on_no_permitted_backend: halt            # never: degrade
+infer_sensitivity_from_declaration: true
+oversight:
+  metadata_generation: human-in-the-loop
+  redaction_review: human-in-the-loop
+  post_deposit_monitoring: human-on-the-loop
+```
+
+Residency takes exactly three values - `on-premise`, `in-jurisdiction` and
+`extra-jurisdiction` - and the PEP orders candidates in that direction, so "the
+most restrictive permitted backend" is a total order rather than a preference in
+prose.
+
+There is no per-agent backend configuration, and there cannot be one: §9.4 is
+enforced by the absence of the surface. An agent asks the PEP by classification and
+capability, and receives whichever the policy permits and the capability survives;
+a `backend:` field under an agent would be a route around the PEP that a deployment
+could configure by accident. The depositor's own preference - *use the local model
+if you can* - is expressible, but only as the `prefer` argument of a single
+resolution, applied after policy and capability have narrowed the candidates, so it
+can remove options and never add one.
 
 ### 11.1 Configuration as provenance
 
@@ -1627,6 +2042,257 @@ endpoint — must be able to pause and resume without loss. The event log (§7.2
 is what makes that possible (ADR-004).
 
 ---
+
+## 12b. Assembly: the parts and the system
+
+An audit late in the work asked a question no cluster had asked: **is any of
+this reachable?** The answer was mostly no. Every agent, most plugins, the
+watched folder, the restricted provenance store, the CARE referral, the chunked
+content inspector and the sign-in routes were written, tested, documented — and
+unreachable from any entry point. `ingest` ran the ingestion agent and stopped.
+
+The failure is invisible from inside a cluster. Each one ended with its
+components complete and its tests green, and nothing in that process asks
+whether the components have been *connected*. It is a subtler form of the
+conformance drift in Appendix B.5: there, rows named components that did not
+exist; here, rows named components that existed and could not be reached. Both
+are true-looking claims about a system that does not do the thing.
+
+Two pieces close it.
+
+**A composition root.** `runtime.py` is the single place where configuration
+becomes running parts, and the single place to look when asking what a
+deployment can do. Its `coverage()` answers that question from the components it
+*constructed* — not from what the source tree contains and not from what entry
+points advertise. The distinction is not academic: `check` reported coverage
+from entry-point discovery, the built-in components are not entry points, and so
+it told operators that every requirement was NOT AVAILABLE while `conformance`
+reported the opposite. Two commands in one tool, contradicting each other about
+the same deployment. A test now asserts they cannot disagree in the direction
+that matters: a requirement the runtime serves may not be one the matrix records
+as absent. It builds every backend, plugin and agent, and reports what
+is missing — an absent vision backend, a repository with no driver, a
+sensitivity class with no permitted model — because a workflow that silently
+skips a step it could not run looks identical to one that ran it and found
+nothing.
+
+**A reachability test.** `tests/test_assembly.py` walks the import graph from
+the entry points a person or another system can actually reach, and fails on any
+component that is not among them. Exemptions are permitted and must carry a
+reason, because an exemption list without reasons becomes a place to hide
+things.
+
+Two further orphans were found by asking which public functions are never called
+anywhere. `discrepancy_item` built gate items for plan divergences and was
+invoked from nowhere, so the DMP agent found differences and nothing put them in
+front of a person. `assert_no_nested_archive` was worse: it returned in both of
+its branches, asserting nothing, while its name suggested a security control
+that was running. It is now `nested_members`, which reports archives inside the
+archive as material received and not opened.
+
+Building this surfaced three further defects that no unit test could have found:
+backend declarations had no field for which *model* to use, so the runtime had
+to guess from the backend's name; an unrecognised backend kind fell through a
+conditional and vanished, producing a quietly smaller deployment; and the
+pipeline written to drive the agents duplicated `WorkflowEngine`, leaving the
+engine unreachable and the system with two answers to "what runs next". The
+engine kept its halt and compensation semantics; the pipeline supplies the steps.
+
+### How the workflow is driven
+
+The workflow is a **graph**, not an ordered list. Each node declares what it
+produces and which requirements it serves; each edge carries the condition under
+which one node leads to another, written as a sentence as well as a predicate.
+
+Three things follow that a list could not give.
+
+**Orphans are detectable.** A node nothing leads to is unreachable, and that is
+a property of the data rather than something a person must notice. It is the
+failure that prompted the change: four agents — declaration, media, redaction
+and publication — were constructed by the runtime and called from nowhere, and
+the step list had no way to express the question. The engine's step list had
+four entries where the runtime built eleven agents.
+
+**Conformance becomes a deduction.** A requirement counts as served when a node
+claiming it is reachable, not when a class declares it. The declaration remains
+a human judgement, because no analysis of Python establishes that a class
+satisfies a sentence of English; what is deduced is whether the claim is
+connected to anything at all. A requirement claimed only by an orphan is
+reported as unserved.
+
+**The diagram is generated.** A picture drawn by hand can describe a workflow
+the software does not have.
+
+```mermaid
+flowchart TD
+  start([start])
+  ingest{{Take in the submission}}
+  dmp{{Read the data management plan}}
+  declaration{{Your statement about the data}}
+  confirm_declaration{{Confirm the proposed claims}}
+  classification{{Work out what is sensitive}}
+  media{{Inspect images and audio}}
+  redaction{{Propose redactions}}
+  metadata{{Draft metadata}}
+  documentation{{Draft documentation}}
+  validation{{Validate the record}}
+  repository{{Choose where to deposit}}
+  review{{Your review}}
+  deposit{{Publish}}
+  start --> ingest
+  ingest -->|material has been registered| dmp
+  dmp -->|material has been registered| declaration
+  declaration --> confirm_declaration
+  confirm_declaration -->|the depositor has confirmed their statement| classification
+  classification -->|the submission contains images or audio| media
+  classification -->|the job has not already concluded| metadata
+  media -->|the job has not already concluded| metadata
+  classification -->|the material was classified sensitive| redaction
+  redaction --> review
+  metadata --> documentation
+  documentation --> validation
+  validation --> repository
+  repository --> review
+  review --> deposit
+```
+
+Diamond nodes need a person; rectangles run automatically. Reachability is
+necessary and not sufficient: a node reachable in the topology may still never
+run, because its condition depends on data no submission provides. The graph
+says a path exists, not that anyone walks it.
+
+
+**Orchestration is deterministic.** `WorkflowEngine` walks the workflow graph
+and runs the first node whose incoming condition holds against folded state. No model
+is asked what to do next; there is no planner and no tool-selecting agent, and a
+test asserts the engine module never references a backend. A model cannot cause
+a step to be skipped, reordered or repeated.
+
+**Models live inside agents.** Declaration, classification, metadata,
+documentation, redaction, plan extraction and image inspection all use one.
+Validation, provenance, the exposure ledger and the gate are deterministic by
+construction.
+
+**Failures are retried before they halt.** An `ExternalServiceError` — a local
+model that timed out on a long document, a registry briefly unreachable — is
+retried with capped exponential backoff, each attempt recorded. Any other
+exception is not retried: a malformed record will be malformed again, and
+repeating it only delays the halt. That distinction is why
+`ExternalServiceError` exists as a separate type.
+
+**Steps requiring a person are absent from the list rather than waiting in it.**
+A step that is never runnable is clearer than one that runs and then blocks, and
+it means the engine stops with no separate notion of waiting.
+
+An earlier version of this had one step registered. The mechanism was
+deterministic and correct and orchestrated almost nothing — the assembly failure
+one level up.
+
+### Choosing a repository
+
+Three sources name a repository, with different authority, and conflating them
+is how a system either ignores what a researcher asked for or obeys a sentence
+it found in a CSV.
+
+| Source | Authority | Mechanism |
+|---|---|---|
+| The depositor's instruction | Directive: they are accountable for the deposit | Read from `trusted_instructions` |
+| The data management plan | A promise to a funder | Deterministic field lookup |
+| A ranking | A proposal, only when both are silent | Registry facts, ordered by a model |
+
+The trust boundary carries the design. An instruction arrives through an
+authenticated channel and is placed in a labelled system turn, structurally
+separate from ingested material (ADR-024). The identical sentence inside a data
+file is content and carries no authority whatever, which is what stops a
+submission from choosing where it is published.
+
+A plan commitment is a structured field, so matching it needs no model at all.
+Using one would add an error rate for no gain.
+
+**An extracted preference is never acted on unconfirmed.** A model reading "we
+should probably avoid EUDAT this time" can readily produce `EUDAT`. So the
+interpretation is put back to the depositor with their own words beside it —
+"you asked for EUDAT" is checkable, "a preference was detected" is not — and the
+name is matched against the registry shortlist rather than handed to a driver,
+so a repository that does not exist resolves to nothing instead of to a
+plausible wrong endpoint.
+
+Where the depositor asks for one repository and the plan promises another, that
+is a **discrepancy, not an override**: flagged for the same reason every other
+plan divergence is flagged, and enforced for none of them. The gate item notes
+that the funder may expect the plan to be updated.
+
+Selecting remains a human act with an ORCID against it. Not because a model
+would choose badly, but because a persistent identifier is irreversible and the
+accountability chain needs a person at that point.
+
+### Three more things that were built and not connected
+
+A later audit, prompted by a question about the metadata agent, found three
+further instances of the same failure. They are recorded because the pattern is
+the finding, not the individual defects.
+
+**The publication agent was bypassed.** `PublicationAgent` holds four refusals —
+validation errors block, withheld artefacts are not uploaded, working material
+is not deleted without a confirmed identifier, an unsettled interrupted attempt
+blocks — and the deposit route called the repository driver directly. A job with
+validation errors could be published from the interface. The service now routes
+through the agent, and checks the gate *before* reporting a missing driver: a
+missing driver is the deployment's problem and a missing decision is the
+researcher's, and telling someone their installation is misconfigured when what
+is outstanding is a decision they must make sends them to fix the wrong thing.
+
+**The metadata standard could not be chosen.** The profile was a fixed
+attribute. A plan committing to DataCite was parsed into a `METADATA_STANDARD`
+commitment and never acted on; "use RO-Crate" in an instruction was read past.
+Both failed invisibly, because DataCite is the default and asking for the
+default looks exactly like being obeyed. `schema_choice.py` now resolves the
+standard from the same three sources as the repository, with the same authority:
+a plan commitment is a structured field and needs no model, an instruction is a
+directive carried through the authenticated channel, and a default applies when
+both are silent. A standard this deployment cannot emit is put to a person
+rather than silently replaced — depositing in a standard nobody chose is harder
+to notice than a deposit that stopped and asked.
+
+**The workflow stopped after the first step that changed nothing.** Two bugs met
+here. `run_until_blocked` returned as soon as a step left the state unchanged,
+and steps legitimately do: media inspection emits no event when a submission
+holds no images, and redaction emits none at all because its output is gate
+items. Separately, completion was inferred from the events a step produces, so a
+node producing none could never be marked done and the traversal returned it
+forever. Between them, **metadata, documentation and validation never ran** — in
+a workflow whose every component was wired, reachable in the graph, and tested.
+Progress is now measured in steps run, the engine records that a step ran, and
+the loop guard is "this step ran and is still asking to run", which is a real
+stall, rather than "nothing changed", which is ordinary.
+
+**And a message stated an absence it had never checked.** After registry lookup
+moved out of ingestion, the repository confirmation still said "no repository
+called 'Zenodo' was found in the registry" — when no registry had been
+consulted. That is this project's recurring failure arriving from the other
+side: an unasked question reported as a negative answer, sitting in a message
+someone reads while deciding whether to publish. It now distinguishes *not yet
+consulted* from *consulted and absent*.
+
+### The data management plan, as an instance of this
+
+R8 was recorded as implemented and was unreachable: `DmpAgent` and its sources
+existed, and no command, endpoint or route accepted a plan. A plan now arrives
+three ways.
+
+| Route | Treatment |
+|---|---|
+| A supplied path or URL | Read directly; the depositor said where it is |
+| Found inside the submission | Detected on ingestion |
+| Absent | Recorded as absent, which is not permission (ADR-023) |
+
+The second is the likeliest in practice — exported from DMPonline or Argos,
+dropped beside the data and zipped together — and was the one not handled at
+all. Detection **proposes**: a file that parses as an RDA Common Standard maDMP
+is certain, because nothing else has that structure, and is used. A file merely
+*named* like a plan is a candidate the depositor confirms, because verifying a
+deposit against another project's commitments is worse than verifying against
+none.
 
 ## 13. Open questions
 
@@ -1865,7 +2531,7 @@ Records marked *deviation* depart from the Blueprint's stated text and state why
 | **ADR-016** | Two-channel human interaction: free-text revision, structured commitment | Interpretation | Natural-language revision is necessary for the approval gate to be usable. Commitment must be deterministic: C13 blocks irreversible actions without explicit confirmation, and a model-inferred approval could produce a provenance record attesting to an approval never given. |
 | **ADR-017** | Identity via ORCID; authorisation local; delegation via repository OAuth | Choice | Satisfies P5's requirement for persistent human identifiers. ORCID affiliation is self-asserted and cannot ground authorisation. Zenodo authenticates its API with its own scoped tokens; ORCID is not a deposit credential. |
 | **ADR-018** | Wiring configuration separated from policy configuration | Choice | Different owners (administrator vs. data steward), different change rates, different audit obligations. §5.1 requires the policy priority hierarchy to be documented before deployment; separation makes it a reviewable artefact. |
-| **ADR-019** | Structured workflow interface with chat as one modality | **Deviation** | The reference architecture (§9.2) specifies a chat interface. The P4 approval gate requires a field-level diff with per-item evidence, for which a transcript is a poor instrument and a poor audit record; C6 (WCAG 2.1) is substantially harder to satisfy in a streaming chat interface; C14's role-based override rights need affordances chat does not provide. Chat is retained as an entry modality producing structured proposals. |
+| **ADR-019** | Structured workflow interface with chat as one modality | **Deviation** | The reference architecture (§9.2) specifies a chat interface. The P4 approval gate requires a field-level diff with per-item evidence, for which a transcript is a poor instrument and a poor audit record; C6 (WCAG 2.1) is substantially harder to satisfy in a streaming chat interface; C14's role-based override rights need affordances chat does not provide. Chat is retained as an entry modality producing structured proposals — *retained as a decision about where the interface may go, not as a component that exists*: the interface as built is structured pages only (§9.5b), and no chat surface is in the source tree. Recording it as a modality rather than a feature is deliberate, but a reader should not infer from this row that a conversation surface is available. |
 | **ADR-020** | Agents communicate through shared workflow state, not messages | Choice | Fits the single-process, file-backed event log. Message passing would be more faithful to the Blueprint's multi-agent framing and would ease later distribution across processes, at the cost of machinery the slice does not need. *Reversible:* the agent contracts do not presuppose either mechanism. |
 | **ADR-021** | Dataset and DatasetVersion modelled separately | Choice | Mirrors repository behaviour (concept DOI vs. version DOI). Makes R9 retrofitting and DataCite version relationships structural rather than manual, and leaves the dynamic-data question (§13) open rather than foreclosed. |
 | **ADR-022** | Ingestion primarily by watched folder | Choice | The lowest-friction entry point available, requiring no new tooling of the researcher, which matters for P12 (inclusive access). Direct upload and programmatic submission produce the same initial event, so nothing downstream depends on the entry path. |
@@ -1915,39 +2581,39 @@ gaps would misattribute a specification gap to the implementation.
 
 | ID | Requirement | Priority | Status | Satisfied by | Note |
 |---|---|---|---|---|---|
-| **R1** | Recommend and select repositories meeting funder, journal, institutional and community requirements | SHOULD | Partial — architectural | Repository agent; `RegistryDriver` (FAIRsharing, re3data) | Recommendation implemented; detection of conflicts between funder, journal and institutional policy not built |
-| **R2** | Generate FAIR-aligned, discipline-appropriate metadata using controlled vocabularies, ontologies and community standards including CARE | **MUST** | Implemented | Metadata agent; `SchemaProfile`; `VocabularyProvider` | Explicit-absence field records where no controlled vocabulary exists, as R2 requires. CARE handled as detection and referral only (§3.4) |
-| **R3** | Suggest appropriate vocabularies, ontologies and open data formats | **MUST** | Implemented | Metadata agent; `VocabularyProvider` (OLS) | Distinguishes ontology alignment from controlled-vocabulary concept linkage, per the requirement text |
-| **R4** | Validate metadata quality against community best practices and standards | **MUST** | Implemented | Validation agent; `ValidatorDriver` (JSON Schema, SHACL) | Repository-provided validators preferred where available, community validators as fallback. Outputs enter the provenance chain per R4's cross-reference to R10 |
-| **R5** | Draft data documentation including READMEs and data dictionaries | **MUST** | Implemented | Documentation agent | Inferable elements drafted automatically; variable definitions, units, missing-value codes and collection procedures require researcher input, as the requirement specifies |
-| **R6** | Enable interoperable metadata across institutions and Data Director instances | **MUST** | Partial — specification | `SchemaProfile` (DataCite, RO-Crate); core API | Multi-schema expression and crosswalk display implemented. Inter-instance synchronisation not built: the Blueprint does not define what is synchronised, in which direction, or under what conflict resolution (§13) |
-| **R7** | Support assignment of persistent identifiers at point of publication | **MUST** | Implemented | Publication agent; `RepositoryDriver` | PID-ready metadata generated; repository PID capability and any costs surfaced to the user. PID assignment remains the repository's responsibility, as the requirement states |
-| **R8** | Verify data sharing against Data Management Plan commitments | SHOULD | Implemented | DMP agent; `DMPSource` (`dmp-document`, `dmp-madmp`, `dmp-fixture`) | Commitments extracted before repository selection, deposit verified before submission. Discrepancies flagged for human review, never enforced. `closed-not-shared` is a normal terminal state. Functions without a DMP, which R8 requires |
-| **R9** | Retrofit FAIR-aligned metadata for already-published datasets | SHOULD | Partial — architectural | Dataset/DatasetVersion model (ADR-021) | The data model supports it structurally; the retrofit workflow is not built |
-| **R10** | Track provenance of AI agent actions on data and metadata | **MUST** | Implemented | Provenance recorder (deterministic); event log | PROV-O in JSON-LD. Departure from the reference architecture recorded as ADR-009 |
-| **R11** | Link datasets to related research outputs (publications, people, grants, software) | SHOULD | Partial — architectural | Metadata agent; `SchemaProfile`; relation determination (§8.5) | ORCID and ROR linking implemented as part of metadata creation. Relation types are drawn from the target schema's vocabulary, derived where structural and model-proposed with human approval where semantic. Grant and software linking not built |
-| **R12** | Discover related datasets relevant to a research project | MAY | Not implemented | — | Optional; excluded from the slice |
+| **R1** | Recommend and select repositories meeting funder, journal, institutional and community requirements | SHOULD | Implemented | Repository agent; `RegistryDriver` (re3data) | Candidates are shortlisted from the registry with the fields a choice turns on — persistent identifier systems, access conditions, certification, deposit API — and a repository named in the Data Management Plan is surfaced first. The selection is a human act, recorded as one: the choice has funder and journal consequences and is expensive to undo once an identifier exists |
+| **R2** | Generate FAIR-aligned, discipline-appropriate metadata using controlled vocabularies, ontologies and community standards including CARE | **MUST** | Partial — architectural | Metadata agent; `SchemaProfile` (DataCite, Zenodo subset, RO-Crate); OLS grounding; CARE referral | Three of the four clauses are met: records are generated and projected to community standards, terms are grounded against ontologies with absences reported, and CARE is detected and referred to Local Contexts and GIDA as a gate item that blocks deposit until a person acts. **Discipline-appropriate is not met**: both shipped profiles are generic and no domain profile exists, so a crystallographic or genomic deposit gets the same treatment as any other |
+| **R3** | Suggest appropriate vocabularies, ontologies and open data formats | **MUST** | Implemented | Metadata agent; `VocabularyProvider` (OLS4) | Terms are grounded against several hundred ontologies, by exact label or by recorded synonym. Grounding is deliberately strict and separate from search, because a search service answers every query: asked for a spreadsheet column label it offered a plant species, ranked first. An ungrounded term is reported with its near candidates so the depositor can choose |
+| **R4** | Validate metadata quality against community best practices and standards | **MUST** | Partial — architectural | Validation agent; `ValidatorDriver` (JSON Schema) | Required-field checks, JSON Schema validation of the projected record, C15 cross-source consistency checks and C14 field-provenance checks; errors block deposit. Schemas are supplied by the deployment rather than fetched, so a deposit cannot start failing for reasons nobody chose. SHACL validation is not implemented |
+| **R5** | Draft data documentation including READMEs and data dictionaries | **MUST** | Implemented | Documentation agent | Structure drafted from the profile; variable meanings, units, missing-value codes and collection procedures are recorded as gaps for the depositor rather than composed |
+| **R6** | Enable interoperable metadata across institutions and Data Director instances | **MUST** | Partial — specification | Canonical record; three `SchemaProfile` implementations | One internal representation projects to structurally unrelated targets, which is the substance of the requirement. Inter-instance synchronisation is not built: the Blueprint does not define its semantics (§13) |
+| **R7** | Support assignment of persistent identifiers at point of publication | **MUST** | Implemented | Publication agent; Zenodo `RepositoryDriver` | Verified against the Zenodo sandbox: a deposit yields a version DOI and a distinct concept DOI. PID assignment remains the repository's act, as the requirement states |
+| **R8** | Verify data sharing against Data Management Plan commitments | SHOULD | Implemented | DMP agent; `DMPSource` (maDMP, document, fixture) | Commitments are read from the structured fields of a machine-actionable plan, or extracted from a prose plan and marked provisional. Differences from the intended deposit are flagged for human review, never enforced: plans are written years before the data exist. A plan committing to no sharing reaches `closed-not-shared` as a success. Absence of a plan yields no commitments and is not permission (ADR-023). **This row previously read Implemented while none of it existed**; see B.5 |
+| **R9** | Retrofit FAIR-aligned metadata for already-published datasets | SHOULD | Partial — architectural | Dataset/DatasetVersion model (ADR-021); `new_version_of` | The data model and the repository operation support it; no retrofit workflow is built |
+| **R10** | Track provenance of AI agent actions on data and metadata | **MUST** | Implemented | Provenance recorder (deterministic); event log; exposure ledger | PROV-O in JSON-LD with visibility partitions, plus a record of every release of payload to a model. Departure from the reference architecture recorded as ADR-009 |
+| **R11** | Link datasets to related research outputs (publications, people, grants, software) | SHOULD | Partial — architectural | Canonical record; relation determination (§8.5) | ORCID, ROR, related identifiers and funding are carried in the record and projected, with relation types validated against the target vocabulary and model-proposed relations requiring human approval. No agent proposes relations yet: the depositor supplies them |
+| **R12** | Discover related datasets relevant to a research project | MAY | Not implemented | — | Optional; excluded from scope |
 
 ### B.2 Non-functional requirements
 
 | ID | Category | Priority | Status | Satisfied by | Note |
 |---|---|---|---|---|---|
-| **C1** | Security | Mandatory | Partial — deployment | Credential broker; RBAC; hash chain; encryption in transit | Access is role-based, token-verified and auditable. Encryption at rest and adoption of a named compliance baseline such as NIST are infrastructure responsibilities of the deploying institution |
+| **C1** | Security | Mandatory | Partial — deployment | Credential broker; per-user delegated tokens; hash chain; encryption in transit | Access is role-based, token-verified and auditable. Encryption at rest and adoption of a named compliance baseline such as NIST are infrastructure responsibilities of the deploying institution |
 | **C2** | Privacy | Mandatory | Implemented | Declaration gate; classification agent; redaction proposals | Data minimisation applied to metadata outputs; ethics confirmation required before deposit; workflow pauses on detection. Where a statement understates the sensitivity of what it describes, the more restrictive reading is applied and the discrepancy surfaced (ADR-027). Autonomous anonymisation not performed — see ADR-013 for our reading of that constraint |
 | **C3** | Compliance | Mandatory | Partial — deployment | Policy configuration; provenance export; DMP verification | Evidence available on demand through provenance export. The policy corpus itself (funder, journal and institutional rules) is configured by the deploying institution |
 | **C4** | Sovereignty | Mandatory | Implemented | Policy Enforcement Point; backend residency declarations | Processing location constrained by policy; cross-border transfer policy-controlled and auditable. Physical storage location is set by deployment configuration |
-| **C5** | Interoperability | Mandatory | Partial — specification | Core API with generated OpenAPI descriptor | Open standards consumed and produced; open API exposed. The "harmonised API for inter-Director interaction" that C5 mandates is not defined anywhere in the Blueprint; ours is offered as a candidate for community discussion, not as a conformance claim (§13) |
-| **C6** | Accessibility | Mandatory | Partial — deployment | Structured interface (ADR-019) | Built against WCAG 2.1 Level AA; the decision against a chat-only interface was taken partly for this reason. Formal third-party accessibility audit not performed |
+| **C5** | Interoperability | Mandatory | Partial — specification | Core API with generated OpenAPI descriptor; canonical record; three schema profiles | Open standards consumed and produced; one internal record projects to three unrelated targets; a REST API with capability discovery is exposed and its descriptor is generated from the runtime types. What remains unsettled is not our implementation but the requirement: the Blueprint does not define the harmonised API it mandates, so ours is a candidate for community discussion and cannot be a conformance claim |
+| **C6** | Accessibility | Mandatory | Partial — architectural | Server-rendered interface (ADR-019); structural accessibility checks | An interface exists: jobs, job, gate, deposit, with per-item decisions and no bulk accept. Rendered HTML is checked for language declaration, single `h1`, skip link, labelled controls, text-not-colour meaning and visible focus. **WCAG 2.1 AA is not claimed**: automated rules find roughly a third of failures, and no screen reader pass or comprehensibility review has been done |
 | **C7** | Reliability | Mandatory | Partial — deployment | Event log; graceful failure paths | The graceful-failure clause is implemented in full: workflows complete or fail with a clear error state, justification and suggested next steps. The uptime target is a deployment property (ADR-004) |
-| **C8** | Resiliency | Mandatory | Implemented | Event-sourced state; compensating events (ADR-008) | Rollback to last verified state supported. Partial or corrupt records are structurally impossible: state transitions are atomic file writes |
+| **C8** | Resiliency | Mandatory | Implemented | Event-sourced state; compensating events (ADR-008); intent and reconciliation (§7.3) | Rollback to last verified state supported; partial or corrupt records are structurally impossible, since transitions are atomic file writes. A step with an effect outside the system records its intent before acting, so an interrupted attempt is reconciled against the service rather than retried blindly, and an indeterminate outcome is settled by a person |
 | **C9** | Availability | Mandatory | Out of scope | — | Not a property of the software layer (ADR-004) |
-| **C10** | Performance | Mandatory | Implemented | Workflow engine; job status API | Progress feedback exposed per step; long operations run asynchronously with completion notification |
+| **C10** | Performance | Mandatory | Partial — architectural | Workflow engine; CLI status | Progress is observable per step through the event log and the CLI. Asynchronous execution with completion notification is not built; long operations block the caller |
 | **C11** | Scalability | Mandatory | Partial — architectural | Stateless core API; file-backed state | Horizontal scaling is not exercised in this version, and infrastructure-as-code deployment definitions are not produced. The file-backed event log is adequate for the single-user and small institutional profiles and would need revisiting above them |
 | **C12** | Data Governance | Mandatory | Partial — architectural | Policy configuration; provenance; RBAC | Retention, access control, provenance and audit logging enforced. Machine-readable governance policies in a standard such as ODRL not implemented |
 | **C13** | AI Governance | Mandatory | Implemented | Provenance recorder; approval gates; agent identity | All agent actions logged and attributable to a defined agent identity and a named human; irreversible actions blocked without explicit confirmation (§8.2). Alignment with a specific national AI governance framework is a deployment matter |
 | **C14** | Explainability | Mandatory | Deviation | Decision records (ADR-006) | Human-readable structured explanation for every AI-generated output; role-based override for data stewards. Reasoning-trace logging deliberately not implemented — see ADR-006 |
 | **C15** | Data and Metadata Quality | Mandatory | Partial — specification | Validation agent; consistency checker (ADR-011) | Cross-source and internal consistency checking implemented, together with quality profiling of researcher-supplied input. The fuller requirement cannot be met because no community-agreed benchmark for metadata curation quality exists, as the Blueprint itself states (§10.3) |
-| **C16** | Measurability | Mandatory | Partial — architectural | Event log as usage substrate | The event log records everything a usage metric would need. No metrics framework, aggregation or dashboard is built |
+| **C16** | Measurability | Mandatory | Partial — architectural | Event log; exposure ledger; measurement log | The event log and exposure ledger record everything a usage metric would need, and live measurements accumulate to a JSONL file with a summariser. No metrics framework or dashboard exists |
 | **C17** | Affordability | Mandatory | Implemented | Plugin modularity; local backend support; no vector database (ADR-010); tamper evidence rather than public-key infrastructure (ADR-007) | Several architectural decisions were taken specifically to keep the system deployable without commercial infrastructure or specialist staff |
 
 ### B.3 Architecture principles
@@ -1959,7 +2625,7 @@ gaps would misattribute a specification gap to the implementation.
 | **P3** | Security by Design | Implemented | Policy Enforcement Point, credential broker, restricted-by-default provenance, plugin trust constraints, ingested content stripped of instruction authority. The secure path is the default path and cannot be opted out of |
 | **P4** | Human in the Loop | Implemented | Structured approval at every consequential action (§8.2). Oversight mode (in-the-loop or on-the-loop) declared per workflow in policy configuration, as P4 requires |
 | **P5** | Full Traceability | Partial — architectural | PROV-O directed graph, hash chain, ORCID for human identifiers, CRediT roles for human contributions, resolved configuration hashed into the chain, versions individually traceable, export supported. Digital signatures not implemented in favour of tamper evidence (ADR-007) |
-| **P6** | Open Standards | Implemented | DataCite, RO-Crate, PROV-O, JSON Schema, SHACL, OpenAPI, JSON-LD, RDA maDMP Common Standard. No bespoke formats. Crosswalks documented and exposed to the user |
+| **P6** | Open Standards | Implemented | DataCite, RO-Crate, PROV-O, JSON Schema, OpenAPI, JSON-LD, RDA maDMP Common Standard. No bespoke formats. Crosswalks documented and exposed to the user. SHACL is a standard we target through `ValidatorDriver` but do not yet implement (§6.2, R4 in B.1), so it is not claimed here |
 | **P7** | Open Source | Deviation | Published openly in a public repository. The application is EUPL 1.2 rather than a permissive licence as P7 prefers; the interface package that plugin authors depend on is Apache 2.0, preserving P7's stated rationale at the boundary where it operates (ADR-025). Dependencies favour open-source components; no proprietary component is required, though remote model backends may be used where policy permits |
 | **P8** | Explainable AI | Deviation | Structured decision records instead of a chain-of-thought reasoning window (ADR-006). Prompts and metadata schema sources are published, as P8 also requires |
 | **P9** | Locally Adaptable | Implemented | Two-surface configuration (§11); plugin discovery by entry point; per-user standing preferences and per-job instructions (§8.6); core and configurable components architecturally separated; policy inconsistencies surfaced explicitly rather than silently resolved |
@@ -1973,28 +2639,100 @@ gaps would misattribute a specification gap to the implementation.
 
 | Status | MUST / mandatory | SHOULD | MAY | Total |
 |---|---|---|---|---|
-| Implemented | 19 | 1 | 0 | 20 |
-| Partial — architectural | 4 | 3 | 0 | 7 |
-| Partial — deployment | 6 | 0 | 0 | 6 |
-| Partial — specification | 5 | 0 | 0 | 5 |
+| Implemented | 17 | 2 | 0 | 19 |
+| Partial — architectural | 9 | 2 | 0 | 11 |
+| Partial — deployment | 4 | 0 | 0 | 4 |
+| Partial — specification | 4 | 0 | 0 | 4 |
 | Deviation | 3 | 0 | 0 | 3 |
 | Not implemented | 0 | 0 | 1 | 1 |
 | Out of scope | 1 | 0 | 0 | 1 |
 | **Total** | **38** | **4** | **1** | **43** |
 
-Reading this table: 20 of 43 normative items are fully satisfied and a further 18
-are partially satisfied, of which only 7 are limited by decisions of ours. Six await
-institutional configuration or infrastructure that no software project can provide,
-and five are bounded by definitions the Blueprint does not yet contain, principally
-the unspecified inter-instance API (C5, R6) and the absent metadata quality
-benchmark (C15, P1).
+These figures are recomputed from the tables above by
+`tests/test_conformance_matrix.py`, which fails if they disagree. The previous
+figures were counted by hand and were wrong in every column, claiming 46 rows
+where there are 43 — the third hand-maintained count to drift in a single day,
+which is what prompted the check.
 
-All seven MUST functional requirements are implemented; R8, which the Blueprint
-directs implementers to treat as MUST where DMP compliance is auditable, is
-implemented as well. The three deviations from stated text (ADR-006 on
-explainability and the C14 consequence of it, ADR-025 on licensing) and the two
-departures from the reference architecture (ADR-009 deterministic provenance,
-ADR-010 no vector database) are each documented with their reasoning.
+Every mandatory requirement is now implemented or partial; none is absent. Of
+the seven MUST functional requirements, four are implemented (R3, R5, R7, R10)
+and three are partial. R2 meets three of its four clauses but ships no
+discipline-specific profile. R4 lacks SHACL validation. R6 lacks inter-instance
+synchronisation, which the Blueprint does not define.
+
+An earlier draft of this paragraph counted R2 as implemented "in substance",
+which was the same drift Appendix B.5 describes, occurring while that appendix
+was being written. The phrase was doing the work a status column exists to
+prevent.
+
+The audit described below is what closed the gap. Four of the rows it found
+overstated were corrected by writing the missing components rather than by
+lowering the claim: a vocabulary provider, a repository registry driver, a
+schema validator and a Data Management Plan agent, each of which turned out to
+be a day's work behind a protocol that had been defined for weeks.
+
+The three deviations from stated text (ADR-006 on explainability with its C14
+consequence, ADR-025 on licensing) and the two departures from the reference
+architecture (ADR-009 deterministic provenance, ADR-010 no vector database) are
+each documented with their reasoning.
+
+### B.5 What this matrix cost to get right
+
+An audit of this table against the source tree, carried out after cluster 4,
+found six rows claiming components that did not exist: R1 credited a repository
+agent and a registry driver, R3 named an OLS vocabulary client, R4 named JSON
+Schema and SHACL validators, R8 was recorded as **Implemented** naming three
+Data Management Plan plugins that were never written, C5 credited a core API and
+OpenAPI descriptor that were deferred and never built, and C6 claimed an
+interface designed against WCAG 2.1 when no interface exists.
+
+Nothing was concealed and no reviewer was misled, because no reviewer had yet
+seen it. The rows drifted the way such rows drift: each was written while the
+corresponding design was fresh and plausible, was true of the specification, and
+was never checked against the code afterwards.
+
+That is worth recording because §10.2 of the Blueprint makes conformance
+self-declared, with no test suite and no independent verification. This project
+had strong incentives to be accurate, an author who had read the requirements
+closely, and a matrix written in the same repository as the code — and four of
+forty-six rows were still wrong within three weeks. A self-declaration regime
+should assume this is normal rather than exceptional.
+
+Two mitigations, one now in place and one not.
+
+The summary figures are recomputed from the tables by
+`tests/test_conformance_matrix.py`, which also checks that every Blueprint item
+appears exactly once and that no invented status has crept in. This closes the
+narrower failure: three separate hand-maintained counts drifted in a single day,
+including one written in the same session as this appendix.
+
+The second is now in place as well. Every component that serves a requirement
+declares which, in one place from which its capability manifest is derived, and
+`tests/test_conformance_report.py` imports the source tree, collects those
+declarations, and fails if any row claiming a component points at nothing. This
+is the check that would have caught R8. `datadirector conformance` prints the
+same reconciliation.
+
+Two directions are reported. An **unsupported claim** is a row asserting
+something the tree does not contain. An **unclaimed capability** is a component
+serving a requirement the matrix records as absent — less serious, but still a
+conformance statement nobody checked.
+
+Neither check reaches the question that matters most. A component declaring
+`serves = ("R8",)` is making a claim like any other, and only a reader of the
+code can falsify it. What has been removed is the possibility of a row pointing
+at nothing at all; what remains is the possibility of a row pointing at
+something inadequate. The report says so in its own output, because a report
+that read as a verification would be the overstatement it exists to prevent.
+
+A second observation from the correction. Every one of the four missing
+components was small — an HTTP client and a parser apiece — and each sat behind
+a protocol that had been defined, documented and consumed for weeks. The claim
+had drifted not because the work was hard but because the design felt finished
+once the interface existed. That is worth naming, because a specification whose
+conformance is self-declared invites exactly this: the interface is the part
+that gets designed, reviewed and written about, and the implementation behind it
+is the part nobody checks.
 
 ---
 

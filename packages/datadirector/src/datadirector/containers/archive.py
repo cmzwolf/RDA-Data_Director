@@ -47,6 +47,7 @@ def _archive_ref(path: Path) -> ArtefactRef:
 
 
 class ZipContainer:
+    SERVES = ("P3",)
     format_id = "zip"
 
     def manifest(self) -> CapabilityManifest:
@@ -89,6 +90,7 @@ class ZipContainer:
 
 
 class TarContainer:
+    SERVES = ("P3",)
     format_id = "tar"
 
     def manifest(self) -> CapabilityManifest:

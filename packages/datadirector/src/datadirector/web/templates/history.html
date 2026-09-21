@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% block title %}What happened · {{ phase_label or 'everything' }}{% endblock %}
+
+{% block content %}
+<h1>What happened{% if phase_label %}: {{ phase_label | lower }}{% endif %}</h1>
+
+<p><a href="/ui/jobs/{{ job_id }}">Back to the job</a></p>
+
+<nav aria-label="Phases">
+  <ul class="phase-filter">
+    <li>
+      {% if phase %}<a href="/ui/jobs/{{ job_id }}/history">Everything
+        ({{ total }})</a>{% else %}<strong>Everything ({{ total }})</strong>{% endif %}
+    </li>
+    {% for p in phases %}
+      <li>
+        {% if p.key == phase %}<strong>{{ p.label }}</strong>
+        {% else %}<a href="/ui/jobs/{{ job_id }}/history?phase={{ p.key }}">{{ p.label }}</a>
+        {% endif %}
+      </li>
+    {% endfor %}
+  </ul>
+</nav>
+
+{% if not entries %}
+  {# "Nothing recorded" and "this did not happen" are different, and only the
+     first is true here. #}
+  <p>Nothing has happened in this part yet.</p>
+{% else %}
+<ol class="history">
+  {% for entry in entries %}
+    <li class="entry{% if entry.told.concerning %} entry-problem{% endif %}">
+      <p class="head">
+        <strong>{{ entry.told.what }}</strong>
+        {% if entry.told.who %}
+          <span class="who">by <code>{{ entry.told.who }}</code></span>
+        {% endif %}
+        <time datetime="{{ entry.at.isoformat() }}">
+          {{ entry.at.strftime('%d %B %Y, %H:%M') }}
+        </time>
+      </p>
+      {% if entry.told.detail %}
+        <ul class="detail">
+          {% for line in entry.told.detail %}<li>{{ line }}</li>{% endfor %}
+        </ul>
+      {% endif %}
+    </li>
+  {% endfor %}
+</ol>
+{% endif %}
+{% endblock %}

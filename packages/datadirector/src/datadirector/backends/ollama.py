@@ -17,6 +17,7 @@ from .base import build_messages, capabilities_from_config, manifest_for
 
 
 class OllamaBackend:
+    SERVES = ("P10", "P11", "C17", "P14")
     """Model tags are opaque strings; this module never parses their shape."""
 
     def __init__(self, name: str, endpoint: str, model: str, timeout: float = 120.0,

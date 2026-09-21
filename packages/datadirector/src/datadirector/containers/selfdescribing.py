@@ -32,6 +32,7 @@ def _names(path: Path) -> list[str]:
 
 
 class RoCrateContainer:
+    SERVES = ("P3", "P6")
     format_id = "ro-crate"
 
     def __init__(self) -> None:
@@ -65,6 +66,7 @@ class RoCrateContainer:
 
 
 class BagItContainer:
+    SERVES = ("P3", "P6")
     format_id = "bagit"
 
     def __init__(self) -> None:

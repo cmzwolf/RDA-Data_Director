@@ -21,6 +21,12 @@ UNINSPECTED_DECISIONS = [
 
 REDACTION_DECISIONS = [ItemDecision.APPROVE, ItemDecision.REJECT]
 
+CARE_DECISIONS = [
+    ItemDecision.CONSULTED,
+    ItemDecision.NOT_APPLICABLE,
+    ItemDecision.EXCLUDE_FROM_DEPOSIT,
+]
+
 DISCREPANCY_DECISIONS = [
     ItemDecision.APPROVE,
     ItemDecision.CLASSIFY_SENSITIVE,
@@ -57,6 +63,32 @@ def from_media_findings(findings: list[MediaFinding]) -> list[GateItem]:
     return items
 
 
+def care_referral_item(assessment) -> GateItem | None:
+    """A CARE referral as a gate item, or nothing if CARE is not indicated.
+
+    The permitted decisions deliberately exclude `approve`: approving would
+    imply the tool had assessed something, and it has not. A person either
+    consulted the community, determined it does not apply, or withdrew the
+    material.
+    """
+    if not assessment.may_apply:
+        return None
+    detail = list(assessment.guidance)
+    for category, terms in assessment.signals.items():
+        detail.append(f"signal — {category}: {', '.join(terms)}")
+    if assessment.declared_by_depositor:
+        detail.append("the depositor's own statement indicated Indigenous data")
+    return GateItem(
+        item_id="care:referral",
+        kind=GateItemKind.CARE_REFERRAL,
+        summary=("This material may engage the CARE Principles. The tool cannot "
+                 "assess that; a person must consult the community or governance "
+                 "body concerned before deposit."),
+        detail=detail,
+        permitted_decisions=CARE_DECISIONS,
+    )
+
+
 def from_redaction_proposals(proposals: list[RedactionProposal]) -> list[GateItem]:
     """One item per proposed change. Never grouped: grouping is bulk accept by
     another name."""
@@ -82,6 +114,7 @@ def discrepancy_item(item_id: str, summary: str, detail: list[str],
 
 
 class Gate:
+    SERVES = ("P4", "C13", "C14")
     """Holds items and records resolutions. Blocks deposit until all are decided."""
 
     def __init__(self, state: GateState | None = None) -> None:
@@ -109,6 +142,14 @@ class Gate:
             raise AuthorityError(
                 f"{decision.value!r} is not available for {item_id!r}; "
                 f"permitted: {[d.value for d in item.permitted_decisions]}"
+            )
+        if decision is ItemDecision.CONSULTED and not (reason or "").strip():
+            # Who was consulted is the substance of the decision; without it the
+            # record says only that someone clicked past a referral.
+            raise AuthorityError(
+                f"{item_id!r}: recording a consultation requires naming who was "
+                "consulted and what they said. Without that the record shows "
+                "only that the referral was dismissed."
             )
         if decision is ItemDecision.PUBLISH_AS_IS and not (reason or "").strip():
             # Publishing material nobody inspected is a person accepting

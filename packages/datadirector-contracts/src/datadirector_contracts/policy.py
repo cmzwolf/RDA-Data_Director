@@ -32,6 +32,13 @@ class BackendDeclaration(BaseModel):
     kind: str = Field(description="ollama | openai-compatible | anthropic | ...")
     endpoint: str | None = None
     residency: Residency
+    model: str | None = Field(
+        default=None,
+        description="Model tag or identifier at the endpoint, e.g. a local "
+        "model tag or a vendor model name. Absent was a gap: a deployment could "
+        "declare a backend and not say which model it meant, and the runtime "
+        "had to guess from the backend's name.",
+    )
     capabilities: list[str] = Field(
         default_factory=list,
         description="Capability names this backend provides, e.g. ['vision']. "
@@ -44,6 +51,48 @@ class BackendDeclaration(BaseModel):
         description="Large local models exceed a two-minute default on ordinary "
         "hardware; a 122B model on a short document can take longer still.",
     )
+
+
+class BackendPreference(BaseModel):
+    """What a depositor would prefer, within what policy already permits.
+
+    **A preference may only narrow.** Policy decides which backends may see
+    material at a given sensitivity; this chooses among them and can never add
+    one. That is the same asymmetry the sensitivity rules obey, and for the same
+    reason: a preference that could widen would be a policy override wearing a
+    friendlier name.
+
+    The two fields are not equivalent in whose judgement they represent.
+
+    `residency_at_most` is the depositor's to decide. "I would rather this never
+    left the building" is a judgement about their own material, and they are
+    better placed to make it than the system is.
+
+    `backend_names` is more the operator's territory — a researcher is not
+    usually well placed to judge which model classifies better — but it is
+    offered because a deployment being tested, or one where a model is known to
+    be slow or unreliable, benefits from the choice.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    residency_at_most: Residency | None = Field(
+        default=None,
+        description="The furthest material may travel. Narrows the permitted "
+        "set; never extends it.")
+    backend_names: list[str] = Field(
+        default_factory=list,
+        description="Preferred backends, in order. Names policy does not permit "
+        "are ignored rather than honoured, and the fact that they were ignored "
+        "is reported.")
+    reason: str | None = Field(
+        default=None,
+        description="Why. Recorded, because a deposit classified by a model the "
+        "researcher chose should carry that fact.")
+
+    @property
+    def is_empty(self) -> bool:
+        return self.residency_at_most is None and not self.backend_names
 
 
 class PolicyConfig(BaseModel):
@@ -86,6 +135,16 @@ class PolicyHalt(Exception):
     Raised rather than degrading to a permitted-but-weaker path. A deployment
     intending to handle sensitive material must configure a local backend; if
     it has not, refusing the work is the honest behaviour.
+    """
+
+
+class PreferenceUnsatisfiable(PolicyHalt):
+    """The preference excludes every backend policy would have permitted.
+
+    Raised rather than resolved by falling back, because silently ignoring "keep
+    this local" and sending the material abroad is a worse outcome than
+    stopping. The depositor asked for something the deployment cannot do, and
+    they should be told that rather than have it quietly done differently.
     """
 
 

@@ -1,0 +1,126 @@
+{% extends "base.html" %}
+{% block title %}Review and publish · {{ job_id }}{% endblock %}
+{% block content %}
+<h1>Review and publish {{ job_id }}</h1>
+
+{# The point of this screen is that a researcher sees what they are about to
+   publish — the record as well as the files — and sees why a publish would be
+   refused here, rather than after pressing publish and being told no. #}
+
+{% if blocked %}
+<div role="alert" class="errors">
+  <h2>Not ready to publish</h2>
+  <p>These must be decided before anything can be published:</p>
+  <ul>
+    {% for reason in blocked %}<li>{{ reason }}</li>{% endfor %}
+  </ul>
+  <p><a class="button" href="/ui/jobs/{{ job_id }}/gate">Review them</a></p>
+</div>
+{% endif %}
+
+<h2>The record that will be published</h2>
+{% if record %}
+<dl class="record">
+  <dt>Title</dt><dd>{{ record.title }}</dd>
+  <dt>Creators</dt>
+  <dd>
+    {% if record.creators %}
+    <ul class="creators">
+      {% for c in record.creators %}
+      <li>{{ c.name }}{% if c.orcid %} <span class="orcid">{{ c.orcid }}</span>{% endif %}</li>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <span class="missing">No creator is listed — a record without one will be
+      refused by the repository.</span>
+    {% endif %}
+  </dd>
+  <dt>Publication year</dt><dd>{{ record.publication_year or '—' }}</dd>
+  <dt>Publisher</dt><dd>{{ record.publisher or 'assigned by the repository' }}</dd>
+  <dt>Resource type</dt><dd>{{ record.resource_type.value }}</dd>
+  {% for d in record.descriptions %}
+  <dt>{{ d.kind }}</dt><dd>{{ d.text }}</dd>
+  {% endfor %}
+  {% if record.subjects %}
+  <dt>Keywords</dt>
+  <dd>{{ record.subjects | map(attribute="term") | join(", ") }}</dd>
+  {% endif %}
+  {% if record.rights %}
+  <dt>Licence</dt><dd>{{ record.rights.licence_id }}</dd>
+  {% endif %}
+  {% if record.language %}
+  <dt>Language</dt><dd>{{ record.language }}</dd>
+  {% endif %}
+</dl>
+{% if may_act %}
+<p><a class="button" href="/ui/jobs/{{ job_id }}/metadata">Review and edit the metadata</a></p>
+{% endif %}
+{% else %}
+<p>No metadata record has been drafted yet. Run the pipeline to draft one.</p>
+{% endif %}
+
+{% if blocking or advisory %}
+<h2>What validation found</h2>
+{% if blocking %}
+<div role="alert" class="errors">
+  <h3>Must be resolved before publishing</h3>
+  <ul class="findings-blocking">
+    {% for f in blocking %}
+    <li>{{ f.field or 'the record' }}: {{ f.message }}</li>
+    {% endfor %}
+  </ul>
+  {% if may_act %}
+  <p>Fix these on the metadata screen; the record is re-checked when you save.</p>
+  {% endif %}
+</div>
+{% endif %}
+{% if advisory %}
+<p class="findings-note">These are noted but do not block publishing:</p>
+<ul class="findings-advisory">
+  {% for f in advisory %}
+  <li>{{ f.field or 'the record' }}: {{ f.message }}</li>
+  {% endfor %}
+</ul>
+{% endif %}
+{% endif %}
+
+<h2>What will be published</h2>
+<ul class="will-upload">
+  {% for name in uploading %}<li>{{ name }}</li>{% endfor %}
+</ul>
+
+{# What will NOT be uploaded matters as much: a researcher who believed a file
+   was included and finds later that it was not has been misled by an omission. #}
+<h2>What will not be published</h2>
+{% if excluded %}
+<ul class="will-exclude">
+  {% for name in excluded %}<li>{{ name }} — excluded at review</li>{% endfor %}
+</ul>
+{% else %}
+<p>Nothing has been excluded.</p>
+{% endif %}
+
+<dl>
+  <dt>Repository</dt><dd>{{ repository }}</dd>
+</dl>
+
+{% if not blocked and not blocking %}
+<div role="note" class="irreversible">
+  <h2>This cannot be undone</h2>
+  <p>
+    Publishing mints a persistent identifier. The record can be superseded by a
+    new version, but it cannot be withdrawn as though it had never existed.
+  </p>
+</div>
+
+<form method="post" action="/ui/jobs/{{ job_id }}/deposit">
+  <div class="choice">
+    {# Unchecked, and the submit button is not focused: reaching this page by
+       accident should not be enough to publish. #}
+    <input type="checkbox" id="confirm" name="confirm_irreversible" value="yes" required>
+    <label for="confirm">I understand that publishing cannot be undone.</label>
+  </div>
+  <button type="submit" class="irreversible">Publish to {{ repository }}</button>
+</form>
+{% endif %}
+{% endblock %}

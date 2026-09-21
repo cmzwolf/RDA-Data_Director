@@ -28,6 +28,13 @@ from .provenance import ReasonCode
 
 
 class GateItemKind(StrEnum):
+    CARE_REFERRAL = "care-referral"
+    """CARE may apply and a person must consult the community concerned.
+
+    An item rather than a warning because it must be acknowledged before
+    deposit: the whole point is that the tool cannot resolve it, so it must not
+    be able to proceed past it silently."""
+
     UNINSPECTED_FILE = "uninspected-file"
     REDACTION_PROPOSAL = "redaction-proposal"
     DECLARATION_DISCREPANCY = "declaration-discrepancy"
@@ -44,6 +51,7 @@ class Treatment(StrEnum):
 
 
 class ItemDecision(StrEnum):
+    """What a human decided about one item."""
     """What a human decided about one item.
 
     `PUBLISH_AS_IS` on an uninspected file is the interesting one: it is a
@@ -53,6 +61,15 @@ class ItemDecision(StrEnum):
 
     APPROVE = "approve"
     REJECT = "reject"
+    CONSULTED = "consulted"
+    """A referral was acted on: the community or governance body was consulted.
+
+    Distinct from `approve`, which would suggest the tool had judged something.
+    Here the tool judged nothing; a person did the thing it asked for."""
+
+    NOT_APPLICABLE = "not-applicable"
+    """A person determined the referral does not apply to this material."""
+
     INSPECTED_EXTERNALLY = "inspected-externally"
     PUBLISH_AS_IS = "publish-as-is"
     EXCLUDE_FROM_DEPOSIT = "exclude-from-deposit"

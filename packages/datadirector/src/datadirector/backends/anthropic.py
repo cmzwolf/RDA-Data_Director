@@ -20,6 +20,7 @@ API = "https://api.anthropic.com/v1/messages"
 
 
 class AnthropicBackend:
+    SERVES = ("P13",)
     def __init__(self, name: str, model: str, broker: CredentialBroker,
                  scope: str = "anthropic:api", timeout: float = 120.0,
                  capabilities: set[ModelCapability] | None = None) -> None:

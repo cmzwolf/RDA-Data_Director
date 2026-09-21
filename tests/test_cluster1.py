@@ -28,6 +28,7 @@ from datadirector.policy.pep import PolicyEnforcementPoint
 from datadirector.provenance.recorder import Recorder
 from datadirector.provenance.restricted import RestrictedStore
 from datadirector.state.projection import fold, fold_to
+from datadirector_contracts import HUMAN_ACTS  # noqa: E402
 from datadirector.state.store import ConcurrentAppendError, EventStore
 
 
@@ -282,3 +283,202 @@ def test_capability_report_names_what_is_unavailable():
     r = resolve(_wiring(), p, PluginRegistry(), application_version="0.1.0")
     text = capability_report_text(r, refused=[])
     assert "R8" in text and "NOT AVAILABLE" in text
+
+
+# ==========================================================================
+# Crash recovery: intent, outcome, reconciliation
+# ==========================================================================
+
+from datadirector_contracts import (  # noqa: E402
+    EffectKind, Reconciliation, StepIntent,
+)
+
+from datadirector.workflow.effects import (  # noqa: E402
+    DID_NOT, INDETERMINATE, TOOK_EFFECT, EffectRecorder, gate_items_for,
+    idempotency_key, reconcile, settle, unfinished,
+)
+
+
+def _intent(step="deposit", effect=EffectKind.REPOSITORY_PUBLISH,
+            target="https://sandbox.zenodo.org", **detail):
+    return StepIntent(step=step, effect=effect, target=target,
+                      idempotency_key=idempotency_key("job", step, target,
+                                                      discriminator=str(detail)),
+                      detail=detail)
+
+
+def test_a_completed_attempt_leaves_nothing_outstanding(store, job_id):
+    recorder = EffectRecorder(store)
+    store.append(ev(job_id))
+    with recorder.attempt(job_id, _intent()) as result:
+        result["pid"] = "10.5072/zenodo.1"
+    assert unfinished(store, job_id) == []
+
+
+def test_a_crash_between_intent_and_outcome_leaves_a_question(store, job_id):
+    """The case the log could not previously express.
+
+    Writing only completions makes "died during" and "never attempted" identical,
+    and a resume that trusts the log deposits again.
+    """
+    store.append(ev(job_id))
+    intent = _intent()
+    store.append(Event(sequence=1, job_id=job_id, kind=EventKind.STEP_STARTED,
+                       agent="test/1.0", payload=intent.model_dump(mode="json")))
+    outstanding = unfinished(store, job_id)
+    assert [a.intent.step for a in outstanding] == ["deposit"]
+
+
+def test_a_failure_the_process_survived_is_not_an_open_question(store, job_id):
+    """We know how it ended, so there is nothing to reconcile."""
+    store.append(ev(job_id))
+    recorder = EffectRecorder(store)
+    with pytest.raises(RuntimeError):
+        with recorder.attempt(job_id, _intent()):
+            raise RuntimeError("the repository refused")
+    assert unfinished(store, job_id) == []
+
+
+def test_the_intent_is_durable_before_the_effect_runs(store, job_id):
+    """If it were written afterwards it would record nothing a crash could use."""
+    store.append(ev(job_id))
+    recorder = EffectRecorder(store)
+    seen = {}
+    with pytest.raises(RuntimeError):
+        with recorder.attempt(job_id, _intent()):
+            seen["at_effect_time"] = [e.kind for e in store.load(job_id)]
+            raise RuntimeError("crash")
+    assert EventKind.STEP_STARTED in seen["at_effect_time"]
+
+
+def test_reconciliation_asks_the_service_rather_than_retrying(store, job_id):
+    store.append(ev(job_id))
+    intent = _intent(deposition_id=1000)
+    store.append(Event(sequence=1, job_id=job_id, kind=EventKind.STEP_STARTED,
+                       agent="test/1.0", payload=intent.model_dump(mode="json")))
+    attempt = unfinished(store, job_id)[0]
+
+    asked = []
+
+    def prober(i):
+        asked.append(i.idempotency_key)
+        return TOOK_EFFECT, "published as 10.5072/zenodo.1"
+
+    result = reconcile(store, job_id, attempt,
+                       {EffectKind.REPOSITORY_PUBLISH: prober})
+    assert asked == [intent.idempotency_key]
+    assert result.finding == TOOK_EFFECT
+    assert unfinished(store, job_id) == [], "a settled answer concludes it"
+
+
+def test_an_unaskable_service_is_indeterminate_not_negative(store, job_id):
+    """An unasked question and a negative answer must not look alike."""
+    store.append(ev(job_id))
+    intent = _intent(effect=EffectKind.EXTERNAL_FETCH)
+    store.append(Event(sequence=1, job_id=job_id, kind=EventKind.STEP_STARTED,
+                       agent="test/1.0", payload=intent.model_dump(mode="json")))
+    attempt = unfinished(store, job_id)[0]
+
+    result = reconcile(store, job_id, attempt, {})
+    assert result.finding == INDETERMINATE
+    assert unfinished(store, job_id), "it stays open until a person settles it"
+
+
+def test_a_prober_that_raises_is_indeterminate(store, job_id):
+    store.append(ev(job_id))
+    intent = _intent()
+    store.append(Event(sequence=1, job_id=job_id, kind=EventKind.STEP_STARTED,
+                       agent="test/1.0", payload=intent.model_dump(mode="json")))
+    attempt = unfinished(store, job_id)[0]
+
+    def prober(i):
+        raise OSError("service unreachable")
+
+    assert reconcile(store, job_id, attempt,
+                     {EffectKind.REPOSITORY_PUBLISH: prober}).finding \
+        == INDETERMINATE
+
+
+def test_a_person_settles_what_the_system_cannot(store, job_id, researcher):
+    """Guessing is how a dataset gets published twice or silently not at all."""
+    store.append(ev(job_id))
+    intent = _intent()
+    store.append(Event(sequence=1, job_id=job_id, kind=EventKind.STEP_STARTED,
+                       agent="test/1.0", payload=intent.model_dump(mode="json")))
+    attempt = unfinished(store, job_id)[0]
+
+    settle(store, job_id, attempt, TOOK_EFFECT, human=researcher,
+           detail="checked the sandbox: record 599855 exists")
+    assert unfinished(store, job_id) == []
+    reconciled = [e for e in store.load(job_id)
+                  if e.kind is EventKind.STEP_RECONCILED]
+    assert reconciled[0].human == researcher
+
+
+def test_a_person_must_say_which_way_it_went(store, job_id, researcher):
+    store.append(ev(job_id))
+    intent = _intent()
+    store.append(Event(sequence=1, job_id=job_id, kind=EventKind.STEP_STARTED,
+                       agent="test/1.0", payload=intent.model_dump(mode="json")))
+    attempt = unfinished(store, job_id)[0]
+    with pytest.raises(ValueError, match="does not settle anything"):
+        settle(store, job_id, attempt, INDETERMINATE, human=researcher,
+               detail="not sure")
+
+
+def test_unfinished_attempts_become_gate_items(store, job_id):
+    store.append(ev(job_id))
+    intent = _intent(artefact="observations.csv",
+                     effect=EffectKind.REPOSITORY_UPLOAD)
+    store.append(Event(sequence=1, job_id=job_id, kind=EventKind.STEP_STARTED,
+                       agent="test/1.0", payload=intent.model_dump(mode="json")))
+    items = gate_items_for(unfinished(store, job_id))
+    assert len(items) == 1
+    assert "interrupted" in items[0].summary
+    assert any("Retrying without" in d for d in items[0].detail)
+
+
+def test_retries_of_one_attempt_share_a_key_and_different_ones_do_not():
+    """Two retries the service cannot tell apart is how duplicates are made;
+    two distinct attempts sharing a key is how one silently replaces the other."""
+    first = idempotency_key("job-a", "upload", "zenodo", discriminator="a.csv")
+    again = idempotency_key("job-a", "upload", "zenodo", discriminator="a.csv")
+    other_file = idempotency_key("job-a", "upload", "zenodo",
+                                 discriminator="b.csv")
+    other_job = idempotency_key("job-b", "upload", "zenodo",
+                                discriminator="a.csv")
+    assert first == again
+    assert len({first, other_file, other_job}) == 3
+
+
+def test_every_event_kind_can_be_folded(store, job_id, researcher):
+    """The fold refuses kinds it does not know, which is correct and means a new
+    kind must be considered rather than fall through.
+
+    Two kinds added for ownership broke the projection until they were listed.
+    An earlier version of this test inspected the dispatch table, which was the
+    wrong question: two kinds are handled before the lookup and would have been
+    reported as missing. What matters is whether folding raises, so that is what
+    is checked.
+    """
+    from datadirector.state.projection import UnknownEventKind, fold
+    from datadirector_contracts.events import CompensationPayload
+
+    store.append(ev(job_id))
+    for kind in EventKind:
+        if kind is EventKind.COMPENSATED:
+            payload = CompensationPayload(compensates_sequence=1,
+                                          restores_state_at_sequence=1,
+                                          reason="test").model_dump(mode="json")
+        else:
+            payload = {}
+        human = researcher if kind in HUMAN_ACTS else None
+        store.append(Event(sequence=1, job_id=job_id, kind=kind,
+                           agent="test/1.0", human=human, payload=payload))
+        try:
+            fold(store.load(job_id))
+        except UnknownEventKind as exc:
+            pytest.fail(
+                f"{kind.value} cannot be folded: {exc}. Add it to _STEP_FOR "
+                "with None where it does not advance the workflow, or handle it "
+                "in _apply.")

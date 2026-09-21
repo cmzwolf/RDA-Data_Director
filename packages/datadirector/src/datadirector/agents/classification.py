@@ -55,7 +55,7 @@ distinct_count or a cross_tab often settles a question without exposing values.
 Return ONLY a JSON object, no prose:
 {"probes": [{"kind": "...", "field": "...", "field_b": null, "artefact": null,
              "index": 0, "n": 10, "because": "what this would establish"}]}
-"""
+             """
 
 INTERPRET_PROMPT = """\
 You are assessing the sensitivity of a dataset from its structural profile and
@@ -76,23 +76,30 @@ Return ONLY a JSON object, no prose:
 {"sensitivity": "public"|"internal"|"sensitive",
  "indicators": ["what specifically led to this"],
  "confidence": 0.0-1.0}
-"""
+ """
 
 _LEVELS = {"public": SensitivityClass.PUBLIC,
            "internal": SensitivityClass.INTERNAL,
            "sensitive": SensitivityClass.SENSITIVE}
 
 
+from ..care.referral import detect as detect_care
+from ..gate.items import care_referral_item
+from ..profiling.structural import profile_tree
+from ..workflow.graph import Condition
+from .base import Capabilities, Invocation, Outcome
+from .registry import AgentContext, register_agent
+
+@register_agent
 class ClassificationAgent(Agent):
     name = "classification"
+    serves = ("C2", "P3")
 
     def __init__(self, pep, executor: ProbeExecutor, *, max_probes: int = 8) -> None:
         self._pep = pep
         self._executor = executor
         self.max_probes = max_probes
 
-    def runnable(self, state: JobState) -> bool:
-        return state.step == "classification"
 
     # -- phase 2 -----------------------------------------------------------
 
@@ -281,3 +288,45 @@ class ClassificationAgent(Agent):
     @staticmethod
     def _current(state: JobState) -> SensitivityClass:
         return state.classification.level if state.classification else SensitivityClass.SENSITIVE
+
+    @classmethod
+    def build(cls, context: AgentContext) -> "ClassificationAgent":
+        return cls(context.pep, None)
+    @classmethod
+    def capabilities(cls) -> Capabilities:
+        return Capabilities(
+            name="classification",
+            summary=("forms a provisional view of what is sensitive from "
+                     "names, structure, metadata and probed content"),
+            needs_backend=ModelCapability.TEXT_GENERATION,
+            human_follows=True,
+            establishes=(
+                Condition("a provisional sensitivity view exists",
+                          lambda s: s.classification is not None),
+            ),
+            inspects_material=True,
+            serves=("C2", "P3"))
+    def run(self, invocation: Invocation) -> Outcome:
+        """Form and record the provisional view, and raise what it triggers.
+        The probe executor comes from the handle, built by the deployment
+        from the same structural profile the file list was built from - so a
+        probe and a listing can never disagree about what the submission
+        contains, and this agent never builds an executor by hand.
+        """
+        handle = invocation.job
+        state = handle.state
+        root = handle.unpacked_root()
+        profile = profile_tree(root)
+        agent = ClassificationAgent(self._pep, handle.probe_executor(profile))
+        events, decision = agent.classify(state)
+        names = [str(p.relative_to(root)) for p in sorted(root.rglob("*"))
+                 if p.is_file()]
+        columns = [c.name for entry in getattr(profile, "files", [])
+                   for c in getattr(entry, "columns", [])]
+        item = None
+        if names or columns:
+            item = care_referral_item(detect_care(field_names=names + columns))
+        return Outcome(job_id=handle.job_id, events=events,
+                       gate_items=[] if item is None else [item],
+                       decision=decision,
+                       message="formed the provisional sensitivity view")

@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+{% block title %}Jobs · Data Director
+<p class="hint">
+  Leaving this institution? <a href="/ui/jobs/sole-owned">Check which jobs only
+  you can act on</a> — once you have gone, nobody else will be able to.
+</p>
+{% endblock %}
+{% block content %}
+<h1>{{ heading }}</h1>
+
+{% if sole_owned_notice %}
+<p class="notice">
+  These are the jobs where you are the only owner. If you leave, they stay
+  readable for accountability but nobody will be able to act on them. Add
+  another owner to any you want continued.
+</p>
+{% endif %}
+
+{% if not jobs %}
+  <p>No jobs.</p>
+{% else %}
+<table>
+  <caption>{{ jobs | length }} job{{ '' if jobs | length == 1 else 's' }}</caption>
+  <thead>
+    <tr>
+      <th scope="col">Job</th>
+      <th scope="col">Progress</th>
+      <th scope="col">Sensitivity</th>
+      <th scope="col">Awaiting you</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for job in jobs %}
+    <tr>
+      <td><a href="/ui/jobs/{{ job.job_id }}">{{ job.job_id }}</a></td>
+      <td>
+        {# Named for what is happening, not for the agent doing it: "working
+           out what is sensitive" is something a researcher understands. #}
+        {{ job.phase_label }}
+        <span class="state state-{{ job.phase_state }}">{{
+          job.phase_state.replace('-', ' ') }}</span>
+        {% if job.halted_reason %}
+          <span class="detail">{{ job.halted_reason }}</span>
+        {% endif %}
+      </td>
+      <td>{{ job.sensitivity or 'not yet established' }}</td>
+      <td>
+        {% if job.gate_unresolved %}
+          <a href="/ui/jobs/{{ job.job_id }}/gate">{{ job.gate_unresolved }}
+            item{{ '' if job.gate_unresolved == 1 else 's' }} to review</a>
+        {% else %}nothing{% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
+<p class="hint">
+  Leaving this institution? <a href="/ui/jobs/sole-owned">Check which jobs only
+  you can act on</a> — once you have gone, nobody else will be able to.
+</p>
+{% endblock %}

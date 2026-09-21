@@ -1,0 +1,133 @@
+{% extends "base.html" %}
+{% block title %}Review · {{ job_id }}{% endblock %}
+{% block content %}
+<h1>Items to review</h1>
+<p><a href="/ui/jobs/{{ job_id }}">Back to job {{ job_id }}</a></p>
+
+{% if not items %}
+  <p>Nothing is waiting for a decision.</p>
+{% else %}
+<p class="notice">
+  {{ unresolved }} item{{ '' if unresolved == 1 else 's' }} still to decide.
+  Deposit is blocked until each one is resolved. Decisions are recorded against
+  your ORCID.
+</p>
+{% endif %}
+
+{#
+  Each item is its own form with its own submit button. There is deliberately no
+  form enclosing several items, no select-all, and no "approve remaining": a
+  reviewer who can accept forty items with one action has reviewed nothing, and
+  the interface is the last place that rule could be quietly broken.
+#}
+{% for item in items %}
+<article class="item {{ 'resolved' if item.resolved else 'pending' }}"
+         aria-labelledby="h-{{ loop.index }}">
+  <h2 id="h-{{ loop.index }}">{{ item.summary }}</h2>
+
+  <dl>
+    <dt>Kind</dt><dd>{{ item.kind }}</dd>
+    {% if item.artefact %}<dt>File</dt><dd>{{ item.artefact }}</dd>{% endif %}
+  </dl>
+
+  {% if item.presumption %}
+    {# "not inspected, presumed sensitive" must not read like "inspected, found
+       sensitive": the first is an absence of evidence and the second is
+       evidence. #}
+    <p class="presumption" role="note">
+      <strong>Presumption, not a finding.</strong> This was not inspected. It is
+      being treated as {{ item.presumed_level or 'sensitive' }} because of what
+      kind of file it is, not because anything was found in it.
+    </p>
+  {% endif %}
+
+  {% if item.confidence is not none %}
+    <p class="confidence">Model confidence: {{ '%.0f' % (item.confidence * 100) }}%
+      — this finding came from a model and may be wrong.</p>
+  {% endif %}
+
+  {% if item.diff %}
+    <h3 id="diff-{{ loop.index }}">What would change</h3>
+    <table class="diff">
+      <caption class="visually-hidden">Proposed change to
+        {{ item.artefact or 'this record' }}</caption>
+      <thead>
+        <tr><th scope="col">Where</th><th scope="col">Now</th>
+            <th scope="col">Would become</th></tr>
+      </thead>
+      <tbody>
+        {% for change in item.diff %}
+        <tr>
+          <th scope="row">{{ change.location }}</th>
+          <td><code>{{ change.before }}</code></td>
+          <td><code>{{ change.after }}</code></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% endif %}
+
+  {% if item.detail %}
+    <h3>Evidence</h3>
+    <ul class="evidence">
+      {% for line in item.detail %}<li>{{ line }}</li>{% endfor %}
+    </ul>
+  {% endif %}
+
+  {% if item.resolved %}
+    <p class="decided">
+      Decided: <strong>{{ item.decision }}</strong> by {{ item.resolved_by }}.
+    </p>
+  {% else %}
+  <form method="post"
+        action="/ui/jobs/{{ job_id }}/gate/{{ item.item_id | urlencode }}"
+        class="decide">
+    <fieldset>
+      <legend>Your decision</legend>
+      {# No option is pre-selected. A default is a decision the interface made. #}
+      {% for decision in item.permitted_decisions %}
+      <div class="choice">
+        <input type="radio" id="d-{{ loop.index0 }}-{{ item.slug }}"
+               name="decision" value="{{ decision }}"
+               {% if decision in item.reason_required %}
+               data-reason-required="true"{% endif %}>
+        <label for="d-{{ loop.index0 }}-{{ item.slug }}">
+          {{ item.decision_labels.get(decision, decision) }}
+        </label>
+      </div>
+      {% endfor %}
+    </fieldset>
+
+    <div class="reason">
+      <label for="reason-{{ item.slug }}">
+        Reason
+        {% if item.reason_required %}
+          <span class="required">(required for
+            {{ item.reason_required | join(' and ') }})</span>
+        {% endif %}
+      </label>
+      <p class="hint" id="hint-{{ item.slug }}">
+        What a reader in two years needs to understand this decision.
+      </p>
+      <textarea id="reason-{{ item.slug }}" name="reason" rows="3"
+                aria-describedby="hint-{{ item.slug }}"></textarea>
+    </div>
+
+    <button type="submit">Record decision</button>
+  </form>
+  {% endif %}
+</article>
+{% endfor %}
+
+{# Every item decided and nothing else runs on its own: the deposit node is
+   human, so the engine's "Continue" can never clear it. This link is the only
+   way forward from a gate that has nothing left to decide. #}
+{% if ready_to_publish %}
+    <div class="notice">
+      <p><strong>Nothing left to decide.</strong> This job is ready to publish.
+      Publishing mints a persistent identifier and cannot be undone.</p>
+      <p><a class="button" href="/ui/jobs/{{ job_id }}/deposit">Publish</a></p>
+    </div>
+{% endif %}
+{% endblock %}
+

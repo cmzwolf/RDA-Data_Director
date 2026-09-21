@@ -1,0 +1,15 @@
+{
+  "dmp": {
+    "title": "Coastal station monitoring",
+    "dataset": [{
+      "title": "Surface temperature series",
+      "metadata": [{"metadata_standard_id": {"identifier": "DataCite", "type": "other"}}],
+      "preservation_statement": "Retained for ten years by the observatory.",
+      "distribution": [{
+        "data_access": "open",
+        "host": {"title": "Zenodo", "url": "https://zenodo.org"},
+        "license": [{"license_ref": "CC-BY-4.0", "start_date": "2026-01-01"}]
+      }]
+    }]
+  }
+}

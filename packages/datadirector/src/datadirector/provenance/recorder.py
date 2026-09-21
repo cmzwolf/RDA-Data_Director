@@ -39,6 +39,7 @@ class ProvenanceError(DataDirectorError):
 
 
 class Recorder:
+    SERVES = ("R10", "P5", "C13", "C3", "C12")
     """Records activities and the events that accompany them."""
 
     def __init__(self, store: EventStore, graph_root: Path | str) -> None:

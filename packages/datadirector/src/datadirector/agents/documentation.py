@@ -66,7 +66,7 @@ from ..job_handle import (latest_drafted_record,
                           recorded_profile)
 from ..job_handle import record_summary as record_view
 from ..workflow.graph import Condition
-from .base import Agent, Capabilities, Invocation, Outcome
+from .base import (Agent, Capabilities, Invocation, LlmOutput, Outcome)
 from .registry import AgentContext, register_agent
 
 class VariableEntry(BaseModel):
@@ -228,6 +228,9 @@ class DocumentationAgent(Agent):
             summary=("drafts the documentation around the record and names "
                       "its own gaps rather than papering over them"),
             needs_backend=ModelCapability.TEXT_GENERATION,
+            llm_output=LlmOutput("the README and data management plan",
+                                  produces=(EventKind.DOCUMENTATION_DRAFTED,),
+                                  editable=True),
             human_follows=True,
             establishes=(
                 Condition("documentation has been drafted",

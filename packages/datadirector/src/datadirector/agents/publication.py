@@ -26,7 +26,7 @@ from datadirector_contracts import (
 )
 
 from ..errors import AuthorityError
-from ..gate.items import Gate
+from ..gate.items import Gate, artefacts_to_upload
 from ..workflow.effects import (
     EffectRecorder, ReconciliationRequired, idempotency_key, unfinished,
 )
@@ -91,7 +91,12 @@ class PublicationAgent(Agent):
                 + "\n  - ".join(blocking))
 
         excluded = set(gate.state.excluded_artefacts())
-        to_upload = [p for p in artefacts if p.name not in excluded]
+        # Compared by every form the log could have used, not by basename:
+        # material registered as "data/obs.csv" is not named "obs.csv" to the
+        # gate, and a basename comparison uploads the file a person excluded.
+        to_upload = artefacts_to_upload(
+            artefacts, excluded,
+            unpacked=self.root / state.job_id / "unpacked")
         if not to_upload:
             # Every file excluded is a coherent outcome, not an error: the
             # researcher decided nothing here may be published.

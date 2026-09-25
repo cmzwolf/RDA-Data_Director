@@ -61,7 +61,7 @@ NO_SHARING = {"closed", "none", "not shared", "no sharing", "will not be shared"
 
 from ..dmp.detect import detect, gate_item_for
 from ..workflow.graph import Condition
-from .base import Capabilities, Invocation, Outcome
+from .base import Capabilities, Invocation, LlmOutput, Outcome
 from .registry import AgentContext, register_agent
 
 class Discrepancy(BaseModel):
@@ -260,6 +260,14 @@ class DmpAgent(Agent):
             summary=("reads the data management plan and compares its "
                      "commitments with what the deposit actually is"),
             needs_backend=ModelCapability.TEXT_GENERATION,
+            llm_output=LlmOutput(
+                  "the commitments read from the plan",
+                produces=(EventKind.DMP_COMMITMENTS_READ,),
+                editable=False,
+                edit_note="the commitments are what the plan says, not what a "
+                  "person can type into it. If the reading is wrong, correct "
+                  "the plan and read it again; where the plan and the record "
+                  "disagree, that is what the comparison items are for."),
             human_follows=True,
             establishes=(
                 Condition("the plan's commitments have been read",

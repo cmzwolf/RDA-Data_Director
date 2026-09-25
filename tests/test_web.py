@@ -194,15 +194,25 @@ def test_a_care_referral_offers_no_approval(web, service, researcher):
     assert 'value="consulted"' in body
 
 
-def test_a_redaction_shows_what_would_change(web, service, researcher):
-    """'Redact column 3' is not reviewable; a before and after is."""
+def test_a_redaction_shows_what_the_proposal_describes(web, service,
+                                                       researcher):
+    """Redact column 3 is not reviewable; a before and a described
+    outcome are - and the described outcome is named as one the
+    tool will not apply."""
     client, sign_in = web
     job_id = _job(service, researcher)
     service.add_gate_items(job_id, [_redaction()])
     sign_in(researcher)
     body = client.get(f"/ui/jobs/{job_id}/gate").text
     assert "village" in body
-    assert "reduced precision" in body.lower()
+    assert "values reduced in precision" in body.lower()
+    # Nothing on the page may read as an edit the tool makes: no
+    # bare treatment verb, and the table says who would carry it
+    # out.
+    assert "What would change" not in body
+    assert "Would become" not in body
+    assert "If edited by a person outside this tool" in body
+    assert "A proposal, not a change." in body
 
 
 def test_the_evidence_is_shown_beside_the_proposal(web, service, researcher):
@@ -857,6 +867,46 @@ def test_an_empty_phase_says_nothing_is_recorded_not_nothing_happened(
     assert "Nothing has happened in this part yet" in body
 
 
+def test_the_review_history_leads_to_the_items_still_outstanding(
+        web, service, researcher):
+    """The dead end this fixes: arriving at the review history from the job
+    page's "details" link found "nothing has happened yet" while items stood
+    unresolved, and the gate — where the decisions actually happen — was
+    reachable only by going back to the job page."""
+    client, sign_in = web
+    job_id = _job(service, researcher)
+    service.add_gate_items(job_id, [_uninspected(), _redaction()])
+    sign_in(researcher)
+    body = client.get(f"/ui/jobs/{job_id}/history",
+                      params={"phase": "review"}).text
+    assert f'href="/ui/jobs/{job_id}/gate"' in body, (
+        "the review history offers no way to the gate")
+    assert "still need your decision" in body
+    # The items raised belong to the review's own history: what was put to
+    # the person is the thing they came to see, not only what they decided.
+    assert "was not inspected" in body
+    assert ("Proposed: responses.csv · village — a redaction made outside this tool would reduce the precision of the values") in body
+     # The page must not leave the impression that anything was masked: the
+     # proposals say they are proposals.
+    assert "Nothing has been masked or removed" in body
+
+
+def test_the_review_history_offers_no_gate_link_when_nothing_is_outstanding(
+        web, service, researcher):
+    """The link means "there is something to decide here". Once the gate is
+    cleared it would promise a screen with nothing to act on."""
+    client, sign_in = web
+    job_id = _job(service, researcher)
+    service.add_gate_items(job_id, [_uninspected()])
+    service.resolve(job_id, "uninspected:plate.png",
+                    ItemDecision.EXCLUDE_FROM_DEPOSIT, human=researcher)
+    sign_in(researcher)
+    body = client.get(f"/ui/jobs/{job_id}/history",
+                      params={"phase": "review"}).text
+    assert "still need your decision" not in body
+    assert "You decided an item" in body
+
+
 def test_a_fresh_job_shows_the_phase_it_is_actually_at(full_web, researcher):
     """Falling back to the last phase showed 'Publishing — pending' for a job
     that had just arrived, which is worse than saying nothing."""
@@ -1139,6 +1189,143 @@ def test_the_statement_is_recorded_before_it_is_read(full_web, researcher):
     assert recorded
     assert recorded[0].payload["statement"] == statement
     assert recorded[0].human == researcher
+
+def test_the_history_page_recalls_what_the_researcher_said(full_web, researcher):
+    """The page quotes the statement instead of reporting that one exists.
+
+    What was here before said that a statement had been kept, which is a claim
+    about the record. A person returning weeks later is trying to remember what
+    they said: only the words themselves answer that, and the history page is
+    where they come looking.
+    """
+    client, sign_in, _ = full_web
+    sign_in(researcher)
+    response = client.post(
+         "/ui/submit",
+        files={"upload": ("d.zip", _upload({"a.csv": "x\n1\n"}),
+                            "application/zip")},
+        data={"instruction": "", "dmp": ""})
+    job_id = _job_id_from(response)
+    statement = ("Interviews with traditional owners; consent excludes "
+                   "quotation.\n\nCollected at Riverbank, 2003 to 2019.")
+    client.post(f"/ui/jobs/{job_id}/declaration", data={"statement": statement})
+
+    body = client.get(f"/ui/jobs/{job_id}/history").text
+    assert "Interviews with traditional owners; consent excludes quotation." \
+            in body
+    assert "Collected at Riverbank, 2003 to 2019." in body
+    assert "kept exactly as you wrote it" not in body
+
+
+def test_a_statement_arrives_in_the_shape_it_was_written(full_web, researcher):
+    """Markdown a researcher types is formatting, not a wall of text.
+
+    The statement box is a text area, and people use blank lines and asterisks
+    in it as they would in any document. Displayed as one run of characters, a
+    list of sites and the caveat that qualifies it become indistinguishable,
+    which is the defect this exists to remove.
+    """
+    client, sign_in, _ = full_web
+    sign_in(researcher)
+    response = client.post(
+         "/ui/submit",
+        files={"upload": ("d.zip", _upload({"a.csv": "x\n1\n"}),
+                            "application/zip")},
+        data={"instruction": "", "dmp": ""})
+    job_id = _job_id_from(response)
+    client.post(
+        f"/ui/jobs/{job_id}/declaration",
+        data={"statement": ("Cores from **two sites**.\n\n"
+                              "- Riverbank: 14\n- Meadow: 9\n\n"
+                              "Higher ground.\nNot flooded.")})
+
+    body = client.get(f"/ui/jobs/{job_id}/history").text
+    assert "<strong>two sites</strong>" in body
+    assert "<li>Riverbank: 14</li>" in body
+    assert "Higher ground.<br>Not flooded." in body
+
+
+def test_a_statement_cannot_write_the_page_it_is_shown_on(full_web, researcher):
+    """Formatting is not permission to supply markup.
+
+    The displayed text comes from a textarea, passes through a model, and is
+    read on the same screen by an auditor. The markdown subset is deliberately
+    unable to carry HTML, a script URL, or a request to a third party — the last
+    because a remote image would be fetched by whoever opened the page, telling
+    someone outside this installation that the job exists and who read it.
+    """
+    client, sign_in, _ = full_web
+    sign_in(researcher)
+    response = client.post(
+         "/ui/submit",
+        files={"upload": ("d.zip", _upload({"a.csv": "x\n1\n"}),
+                            "application/zip")},
+        data={"instruction": "", "dmp": ""})
+    job_id = _job_id_from(response)
+    client.post(
+        f"/ui/jobs/{job_id}/declaration",
+        data={"statement": ('<script>alert(1)</script>\n\n'
+                              '[open](javascript:alert(1))\n\n'
+                              '![pixel](https://evil.example/t.png)')})
+
+    body = client.get(f"/ui/jobs/{job_id}/history").text
+    quoted = re.search(r'<figure class="said">(.*?)</figure>', body, re.S).group(1)
+    assert "<script>alert" not in quoted
+    assert "&lt;script&gt;alert(1)&lt;/script&gt;" in quoted
+    assert 'href="javascript:' not in quoted
+    assert "<img" not in quoted
+    assert "image not loaded" in quoted
+
+
+def test_an_instruction_is_recalled_whole(full_web, researcher):
+    """What the depositor asked for is quoted, not excerpted at a count.
+
+    An instruction truncated at three hundred characters cuts wherever the count
+    falls rather than where the sense does, which is a summary pretending not to
+    be one.
+    """
+    client, sign_in, _ = full_web
+    sign_in(researcher)
+    instruction = ("Publish only after the ethics letter arrives; until then "
+                    "this is a draft. " + "Hold it there. " * 20)
+    response = client.post(
+         "/ui/submit",
+        files={"upload": ("d.zip", _upload({"a.csv": "x\n1\n"}),
+                            "application/zip")},
+        data={"instruction": instruction, "dmp": ""})
+    job_id = _job_id_from(response)
+
+    body = client.get(f"/ui/jobs/{job_id}/history").text
+    assert "Publish only after the ethics letter arrives" in body
+    assert body.count("Hold it there.") == instruction.count("Hold it there.")
+
+
+def test_the_person_is_not_the_third_party_in_their_own_sentence(
+            full_web, researcher):
+    """A sentence that says "you" is not followed by "by <your orcid>".
+
+    The identifier is the attestation, and it stays visible; what reads wrong is
+    the preposition that turns "You told us something" into something a third
+    party did.
+    """
+    client, sign_in, _ = full_web
+    sign_in(researcher)
+    response = client.post(
+         "/ui/submit",
+        files={"upload": ("d.zip", _upload({"a.csv": "x\n1\n"}),
+                            "application/zip")},
+        data={"instruction": "", "dmp": ""})
+    job_id = _job_id_from(response)
+    client.post(f"/ui/jobs/{job_id}/declaration",
+                 data={"statement": "Careful prose about careful data."})
+
+    body = client.get(f"/ui/jobs/{job_id}/history").text
+    entry = [block for block in re.findall(r'<li class="entry.*?</li>',
+                                               body, re.S)
+                 if "You told us what the data is about" in block]
+    assert entry, "the page did not carry the entry for the statement"
+    assert f"(<code>{researcher.value}</code>)" in entry[0]
+    assert f"by <code>{researcher.value}</code>" not in entry[0]
 
 
 def test_a_failed_parse_keeps_the_statement(full_web, researcher):
@@ -1516,12 +1703,14 @@ def test_a_phase_with_nothing_in_it_offers_no_link(full_web, researcher):
 # invent -- so the screen must let the person supply it and re-check.
 
 
-def _draft(service, job_id, creators=(), title="A study of tide pools"):
+def _draft(service, job_id, creators=(), title="A study of tide pools",
+           descriptions=()):
     import json as json_
-    from datadirector_contracts import CanonicalRecord, Creator, Event
+    from datadirector_contracts import (CanonicalRecord, Creator, Description,
+                                        Event)
     made = [Creator(name=n) for n in creators]
     record = CanonicalRecord(title=title, creators=made, publication_year=2026,
-        resource_type="Dataset")
+        resource_type="Dataset", descriptions=list(descriptions))
     service.store.append(Event(
         sequence=1, job_id=job_id, kind=EventKind.METADATA_DRAFTED,
         agent="metadata/0.1.0",
@@ -1550,6 +1739,62 @@ def test_the_deposit_review_shows_the_metadata_not_only_the_files(
     assert "A study of tide pools" in body
     assert "Aroa, Miriam" in body, (
         "the screen publishes the record but never shows its creators")
+
+
+def test_the_drafted_documentation_keeps_the_shape_it_was_drafted_in(
+        web, service, researcher):
+    """The overview and methods are published as markdown, so a person has to
+    be able to read them as markdown before approving them.
+
+    The documentation agent drafts them in sections and the repository renders
+    that field. Asked to approve a record whose structure reaches them as "##"
+    and "-", the researcher is signing off something they will never see in the
+    form they approved it in — the same defect as a statement arriving as one
+    flat line, on the side of the record that outlives the job.
+    """
+    from datadirector_contracts import Description, DescriptionKind
+    client, sign_in = web
+    job_id = _job(service, researcher)
+    _draft(service, job_id, creators=["Aroa, Miriam"], descriptions=[
+        Description(text="Cores from **two sites**, 2003 to 2019.\n\n"
+                         "- Riverbank: 14\n- Meadow: 9",
+                    kind=DescriptionKind.METHODS)])
+    sign_in(researcher)
+    body = client.get(f"/ui/jobs/{job_id}/deposit").text
+    drafted = re.search(r'<dd class="drafted">(.*?)</dd>', body, re.S).group(1)
+    assert "<strong>two sites</strong>" in drafted
+    assert "<li>Riverbank: 14</li>" in drafted
+    assert "**" not in drafted, "the markup survived into the laid-out page"
+    assert "- Riverbank" not in drafted
+
+
+def test_markup_in_drafted_documentation_cannot_write_the_page(
+        web, service, researcher):
+    """What reaches this field can include a model repeating something a file
+    was named, so it is escaped before it is interpreted.
+
+    The drafted description is the researcher's record and the model's prose at
+    once, and the model has no reason to distrust what it was handed. The
+    renderer is the one a statement passes through, which cannot emit a tag, a
+    script URL, or a request to a third party: escaping first, rather than
+    deciding afterwards what to trust, is what lets drafted prose be laid out at
+    all.
+    """
+    from datadirector_contracts import Description
+    client, sign_in = web
+    job_id = _job(service, researcher)
+    _draft(service, job_id, creators=["Aroa, Miriam"], descriptions=[
+        Description(text='<script>alert(1)</script>\n\n'
+                         '[open](javascript:alert(1))\n\n'
+                         '![pixel](https://evil.example/t.png)')])
+    sign_in(researcher)
+    body = client.get(f"/ui/jobs/{job_id}/deposit").text
+    drafted = re.search(r'<dd class="drafted">(.*?)</dd>', body, re.S).group(1)
+    assert "&lt;script&gt;alert(1)&lt;/script&gt;" in drafted
+    assert "<script>alert" not in drafted
+    assert 'href="javascript:' not in drafted
+    assert "<img" not in drafted
+    assert "image not loaded" in drafted
 
 
 def test_a_blocking_finding_is_shown_and_publish_is_withheld(
@@ -1728,4 +1973,134 @@ def test_drafting_again_yields_to_the_researcher_s_own_revision(full_web,
     assert any(event.kind is EventKind.DOCUMENTATION_DRAFTED
                 for event in service.events(job_id)), (
           "the README is still worth drafting whatever the record says")
+
+
+
+# ==========================================================================
+# Publishing: which files, and what happens when the answer is none
+# ==========================================================================
+
+
+class _Repository:
+    """A driver that says what it was asked to publish."""
+    base_url = "https://sandbox.invalid"
+
+    def __init__(self) -> None:
+        self.attempts: list[list[Path]] = []
+
+    def deposit(self, job_id, record, artefacts, *, on_behalf_of):
+        from datadirector_contracts import DepositReceipt
+        self.attempts.append([Path(a) for a in artefacts])
+        return DepositReceipt(pid="10.5072/zenodo.7",
+                               concept_pid="10.5072/zenodo.1",
+                               landing_page="https://sandbox.invalid/records/7",
+                               deposited_at="2026-09-23T00:00:00Z")
+
+
+def _unpacked(work):
+    """Where ingestion wrote this job's material.
+
+    Handed to the service the way `serve` hands it over: the
+    runtime owns the layout, and nothing else spells it out.
+    """
+    return lambda job_id: work / job_id / "unpacked"
+
+
+@pytest.fixture
+def publishable(tmp_path, sessions, researcher):
+    """The interface over a service wired for deposit, as `serve` wires it.
+
+    The `web` fixture has no driver, no publication agent and no working root,
+    which is exactly the state in which a deposit used to be attempted: the
+    artefacts named in the log could not be resolved to files, and the agent
+    concluded that the researcher had excluded every one of them.
+    """
+    from datadirector.agents.publication import PublicationAgent
+    from datadirector.api.auth import SessionResolver
+    from datadirector.provenance.recorder import Recorder
+
+    store = EventStore(tmp_path / "state")
+    work = tmp_path / "work"
+    driver = _Repository()
+    service = JobService(store, recorder=Recorder(store, tmp_path / "prov"),
+                          driver=driver, unpacked_root=_unpacked(work),
+                          publication=PublicationAgent(driver, work, store=store))
+    resolver = SessionResolver(sessions)
+    app = build_web(FastAPI(), service, resolve_principal=resolver,
+                    resolve_roles=resolver.roles_for)
+    client = TestClient(app, follow_redirects=False)
+    client.cookies.set(COOKIE_NAME, sessions.create(researcher).identifier)
+    return client, service, driver, work
+
+
+def _material(service, work, job_id, artefacts, researcher):
+    """Register material on disk and in the log, and draft the record."""
+    from datadirector_contracts import (
+        CanonicalRecord, Creator, Event, EventKind, ResourceType,
+    )
+
+    unpacked = work / job_id / "unpacked"
+    for name in artefacts:
+        target = unpacked / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("station,temp\nS14,4.1\n", encoding="utf-8")
+    service.store.append(Event(
+        sequence=1, job_id=job_id, kind=EventKind.MATERIAL_REGISTERED,
+        agent="ingestion/0.1.0",
+        payload={"artefacts": list(artefacts), "file_count": len(artefacts)}))
+    record = CanonicalRecord(title="A study of tide pools",
+                              creators=[Creator(name="Aroa, Miriam")],
+                              publication_year=2026,
+                              resource_type=ResourceType.DATASET)
+    service.store.append(Event(
+        sequence=1, job_id=job_id, kind=EventKind.METADATA_DRAFTED,
+        agent="metadata/0.1.0", human=researcher,
+        payload={"record": _json.loads(record.model_dump_json())}))
+
+
+def _withhold(service, job_id, artefact, researcher):
+    item_id = f"uninspected:{artefact}"
+    service.add_gate_items(job_id, [_uninspected(artefact)])
+    service.resolve(job_id, item_id, ItemDecision.EXCLUDE_FROM_DEPOSIT,
+                    human=researcher)
+
+
+def test_publishing_sends_the_files_the_log_registered(publishable, researcher):
+    client, service, driver, work = publishable
+    job_id = _job(service, researcher)
+    _material(service, work, job_id, ["data/obs.csv"], researcher)
+
+    response = client.post(f"/ui/jobs/{job_id}/deposit",
+                            data={"confirm_irreversible": "yes"})
+
+    assert response.status_code == 303, response.text
+    assert response.headers["location"] == f"/ui/jobs/{job_id}"
+    unpacked = work / job_id / "unpacked"
+    assert [p.relative_to(unpacked).as_posix()
+              for p in driver.attempts[-1]] == ["data/obs.csv"]
+
+
+def test_publishing_nothing_at_all_is_said_on_the_job_page(publishable,
+                                                           researcher):
+    """Withholding every file closes the job; the page has to say so.
+
+    The deposit agent refuses to publish an empty collection, which is correct.
+    What the interface owed the researcher was the words, not a 500.
+    """
+    client, service, driver, work = publishable
+    job_id = _job(service, researcher)
+    _material(service, work, job_id, ["data/obs.csv"], researcher)
+    _withhold(service, job_id, "data/obs.csv", researcher)
+
+    response = client.post(f"/ui/jobs/{job_id}/deposit",
+                            data={"confirm_irreversible": "yes"})
+
+    assert response.status_code == 303, response.text
+    assert response.headers["location"].endswith("?notice=nothing-to-deposit")
+    assert not driver.attempts
+
+    page = client.get(response.headers["location"]).text
+    assert "Nothing was published" in page
+    assert "workflow.closed-not-shared" in [
+        e.kind.value for e in service.events(job_id)]
 

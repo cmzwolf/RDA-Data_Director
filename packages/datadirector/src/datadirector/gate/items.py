@@ -5,6 +5,8 @@ Cluster 3 Part E. The workflow proceeds; the gate blocks.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from datadirector_contracts import (
     Event, EventKind, GateItem, GateItemKind, GateState, InspectionTier,
     ItemDecision, MediaFinding, Orcid, RedactionProposal, Resolution,
@@ -20,6 +22,21 @@ UNINSPECTED_DECISIONS = [
 ]
 
 REDACTION_DECISIONS = [ItemDecision.APPROVE, ItemDecision.REJECT]
+
+# A treatment named by a bare verb - "pseudonymise", "suppress" - on a screen
+# reads as something done or about to be done by the thing displaying it. No
+# code path in this system masks, removes or rewrites a value, so treatments
+# are spoken of here as what an edit carried out by a person outside the tool
+# would do. The web surfaces use these words rather than the verb.
+PROPOSAL_WORDS = {
+     "suppress": "a redaction made outside this tool would remove the values",
+     "generalise": "a redaction made outside this tool would replace the "
+                    "values with a broader category",
+     "pseudonymise": "a redaction made outside this tool would replace the "
+                      "values with a stable non-identifying code",
+     "coarsen": "a redaction made outside this tool would reduce the "
+                  "precision of the values",
+}
 
 CARE_DECISIONS = [
     ItemDecision.CONSULTED,
@@ -97,8 +114,11 @@ def from_redaction_proposals(proposals: list[RedactionProposal]) -> list[GateIte
             item_id=f"redaction:{p.artefact}:{p.location}",
             kind=GateItemKind.REDACTION_PROPOSAL,
             artefact=p.artefact,
-            summary=(f"{p.artefact} · {p.location}: {p.treatment.value} "
-                     f"({p.reason_code.value})"),
+            summary=(f"Proposal for {p.artefact} · {p.location}: "
+                     f"{PROPOSAL_WORDS.get(p.treatment.value, p.treatment.value)} "
+                     f"(reason: {p.reason_code.value}). This tool edits no "
+                     f"file; the decision you record is your answer to the "
+                     f"proposal"),
             detail=[p.evidence],
             proposal=p,
             permitted_decisions=REDACTION_DECISIONS,
@@ -189,3 +209,38 @@ class Gate:
                   })
             for r in self.state.resolutions
         ]
+
+
+def exclusion_keys(artefact: Path | str,
+                   unpacked: Path | str | None = None) -> set[str]:
+    """Every form in which a gate decision can name this artefact.
+
+    A decision records an artefact as the log registered it, which for anything
+    submitted inside an archive is a path — `data/obs.csv`, not `obs.csv`.
+    Comparing that against a bare `Path.name` never matches, and the file a
+    researcher withheld becomes the file that is uploaded. Every form is
+    compared, and where the forms disagree the comparison errs toward
+    excluding, because excluding too much is recoverable and publishing what
+    someone withheld is not.
+    """
+    path = Path(artefact)
+    keys = {path.name, path.as_posix()}
+    if unpacked is not None:
+        try:
+            keys.add(path.relative_to(Path(unpacked)).as_posix())
+        except ValueError:
+            pass
+    return keys
+
+
+def artefacts_to_upload(artefacts: list[Path], excluded: set[str], *,
+                        unpacked: Path | str | None = None) -> list[Path]:
+    """The artefacts nobody excluded, in the order they were registered.
+
+    The exclusions come from the gate, the artefacts from the log, and this is
+    the one place the two are reconciled — so that what the deposit screen
+    listed under "what will not be published" is what the deposit leaves out.
+    """
+    return [p for p in artefacts
+            if not (exclusion_keys(p, unpacked) & excluded)]
+

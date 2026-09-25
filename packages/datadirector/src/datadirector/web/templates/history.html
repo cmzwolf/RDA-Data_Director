@@ -22,6 +22,19 @@
   </ul>
 </nav>
 
+{% if phase == "review" and gate_unresolved %}
+  {# The history of a review is not only what was decided: while items stand
+     unresolved, the thing a person came here to do is decide them, and the
+     page has to lead them to where that happens. Arriving from the job page's
+     "details" link and finding only a log, with the gate reachable only by
+     going back, was a dead end. #}
+  <div class="notice">
+    <p><strong>{{ gate_unresolved }} thing(s) still need your decision</strong>
+     before this can be published.</p>
+    <p><a class="button" href="/ui/jobs/{{ job_id }}/gate">Review them</a></p>
+  </div>
+{% endif %}
+
 {% if not entries %}
   {# "Nothing recorded" and "this did not happen" are different, and only the
      first is true here. #}
@@ -33,12 +46,28 @@
       <p class="head">
         <strong>{{ entry.told.what }}</strong>
         {% if entry.told.who %}
-          <span class="who">by <code>{{ entry.told.who }}</code></span>
+           {# In parentheses where the sentence already speaks to the reader as
+              "you": "You told us what the data is about by 0009-…" reads as
+              though someone else did the telling. The identifier stays visible
+              either way, because it is the attestation, not decoration. #}
+           <span class="who">{% if entry.told.second_person %}(<code>{{ entry.told.who }}</code>){% else %}by <code>{{ entry.told.who }}</code>{% endif %}</span>
         {% endif %}
         <time datetime="{{ entry.at.isoformat() }}">
           {{ entry.at.strftime('%d %B %Y, %H:%M') }}
         </time>
       </p>
+      {% if entry.told.said %}
+         {# The person's own words, in the formatting they gave them. Everything
+            reaching a template goes through Jinja's escaping, so a statement
+            containing HTML is still shown as the text it is; `md` adds markup to
+            the plain-text conventions a person can type and to nothing else —
+            see web/markdown.py for why that subset cannot carry a script, a
+            tracked image, or a tag. #}
+        <figure class="said">
+           <figcaption>Your own words, kept as you wrote them</figcaption>
+           {{ entry.told.said | md }}
+        </figure>
+      {% endif %}
       {% if entry.told.detail %}
         <ul class="detail">
           {% for line in entry.told.detail %}<li>{{ line }}</li>{% endfor %}

@@ -40,6 +40,20 @@ class GateItemKind(StrEnum):
     DECLARATION_DISCREPANCY = "declaration-discrepancy"
     DMP_DISCREPANCY = "dmp-discrepancy"
 
+    LLM_OUTPUT = "llm-output"
+    """Something a model wrote, put in front of a person before anything
+    downstream reads it.
+
+    An abstract, a README, a reading of a plan, a redaction proposal. The
+    alternative was to let the next agent consume a draft as though it were a
+    finding, which is how a plausible wrong value becomes a published value:
+    each stage after the first has no way to tell model prose from evidence,
+    and the researcher is the only reader who can. The item names the agent
+    that wrote it and carries the digest of what it wrote, so an approval is
+    bound to one version rather than to whatever the field happens to hold at
+    deposit time.
+    """
+
 
 class Treatment(StrEnum):
     """What a redaction would do. Proposed, never applied without approval."""
@@ -74,6 +88,37 @@ class ItemDecision(StrEnum):
     PUBLISH_AS_IS = "publish-as-is"
     EXCLUDE_FROM_DEPOSIT = "exclude-from-deposit"
     CLASSIFY_SENSITIVE = "classify-sensitive"
+
+    EDITED = "edited"
+    """A person wrote their own version of what a model produced.
+
+    Distinct from `approve`: the machine's wording is not being accepted, it
+    is being replaced. Recorded as a decision because the correction is the
+    evidence, and because the item it closes is the review item for the draft
+    that was corrected."""
+
+    REQUEST_RERUN = "request-rerun"
+    """Ask the model again, with what was wrong said back to it.
+
+    **This is deliberately not a validation.** An earlier reading of this
+    design treated any decision as clearing an item, which let a person press
+    "try again" and have the unvalidated draft flow downstream while they were
+    waiting for the second attempt. A request is an instruction to the tool,
+    not a judgement about the output, so the item stays open until someone
+    approves or edits what the model actually produced."""
+
+
+NON_VALIDATING_DECISIONS = frozenset({ItemDecision.REQUEST_RERUN})
+"""Decisions a person can record that do not attest to the output.
+
+Read by everywhere that asks "is this item still open", so the rule lives in
+one place: a request for another attempt leaves the item open, and an item
+that stays open keeps the workflow behind it."""
+
+
+def counts_as_validation(decision: ItemDecision) -> bool:
+    """Whether this decision is a person standing behind the output."""
+    return decision not in NON_VALIDATING_DECISIONS
 
 
 class RedactionProposal(BaseModel):
@@ -137,7 +182,11 @@ class GateState(BaseModel):
 
     @property
     def resolved_ids(self) -> set[str]:
-        return {r.item_id for r in self.resolutions}
+        # A request for another attempt is not a validation, so it does not
+        # belong here: the draft it concerns is still unvalidated while the
+        # second attempt is running, and nothing downstream may read it.
+        return {r.item_id for r in self.resolutions
+                if counts_as_validation(r.decision)}
 
     @property
     def unresolved(self) -> list[GateItem]:

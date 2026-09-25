@@ -68,7 +68,7 @@ Return ONLY a JSON object:
 
 from datadirector_contracts import EventKind
 from ..workflow.graph import Condition
-from .base import Agent, Capabilities, Invocation, Outcome
+from .base import (Agent, Capabilities, Invocation, LlmOutput, Outcome)
 from .registry import AgentContext, register_agent
 
 @register_agent
@@ -268,6 +268,9 @@ class MetadataAgent(Agent):
             summary=("drafts the canonical record from the structural "
                       "profile, grounded in the controlled vocabulary"),
             needs_backend=ModelCapability.TEXT_GENERATION,
+            llm_output=LlmOutput("the metadata record",
+                                  produces=(EventKind.METADATA_DRAFTED,),
+                                  editable=True),
             human_follows=True,
             establishes=(
                 Condition("a metadata record has been drafted",

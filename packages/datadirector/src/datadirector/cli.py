@@ -25,6 +25,7 @@ from pathlib import Path
 from datadirector_contracts import Visibility
 
 from .credentials.broker import CredentialBroker
+from .credentials.envfile import load_env_file
 from .config.loader import capability_report_text, load_policy, load_wiring, resolve
 from .errors import DataDirectorError
 from .plugins.discovery import PluginRegistry
@@ -82,6 +83,13 @@ def cmd_check(args) -> int:
                 print(f"  - {line}")
     if missing:
         print(f"\nCredentials not set in the environment: {missing}")
+        read = getattr(args, "env_file", None)
+        if read is not None:
+             # "Not set" was true and useless while a filled-in .env sat in the
+             # working directory unread. Say which file was consulted and which
+             # names it supplied — names only, because this is the credential
+             # path, and the thing that gets printed is the thing that leaks.
+            print(f"Environment file: {read.summary()}")
     missing = _missing_web_dependencies()
     if missing:
         # Reported here so it is found while checking configuration rather than
@@ -314,6 +322,96 @@ def cmd_watch(args) -> int:
     return 0
 
 
+def cmd_gate(args) -> int:
+    """Read what a model wrote, and let a named person answer for it.
+
+    The web is where this is normally done, and the command line is where a job
+    could quietly stop: an item that only a browser can resolve is a job that
+    blocks forever with no reason printed anywhere. So this prints what is
+    waiting, and takes the three answers a review item offers — validate it,
+    write your own, ask again — through the same `Gate.resolve` the browser
+    uses, which is the only way the two interfaces refuse the same things.
+    """
+    from datadirector_contracts import ItemDecision, Orcid
+
+    from .pipeline import Pipeline
+    from .runtime import Runtime
+
+    wiring = load_wiring(args.wiring)
+    policy = load_policy(args.policy)
+    resolved = resolve(wiring, policy, PluginRegistry(),
+                        application_version=APP_VERSION)
+    runtime = Runtime(resolved, state_root=wiring.storage.state_root,
+                       working_root=wiring.storage.working_root)
+    pipeline = Pipeline(runtime)
+    who = Orcid(value=args.reviewer)
+
+    if args.rerun:
+        result = pipeline.request_rerun(args.job, args.rerun, human=who,
+                                         note=args.note or args.reason or "")
+        print(f"reran: {', '.join(result.ran)}")
+        for item in result.gate_items:
+            print(f"still waiting: {item.summary}")
+        return 0
+
+    pending = pipeline.pending_reviews(args.job)
+    if args.validate is not None:
+        item = _review_item_for(pending, args.validate)
+        if item is None:
+            print(f"nothing from {args.validate!r} is waiting for a decision",
+                   file=sys.stderr)
+            return 2
+        decision = ItemDecision(args.decision)
+        if decision is ItemDecision.REQUEST_RERUN and not (args.reason
+                                                              or "").strip():
+            print("asking for another attempt requires --reason saying what "
+                   "is wrong with the draft", file=sys.stderr)
+            return 2
+        pipeline.resolve_review(args.job, item.item_id, decision, human=who,
+                                  reason=args.reason)
+        print(f"{decision.value}: {item.summary}")
+        if decision is not ItemDecision.REQUEST_RERUN:
+             # The distinction the whole file is about: two of the three
+             # answers validate the draft, and the third leaves it exactly as
+             # blocked as it was. Printing them alike would recreate the defect.
+            remaining = pipeline.pending_reviews(args.job)
+            print(f"still waiting: {len(remaining)}")
+        else:
+            print(f"still waiting: {len(pipeline.pending_reviews(args.job))}"
+                   " (a request for another attempt is not a validation)")
+        return 0
+
+    if not pending:
+        print("no model output is waiting for a decision")
+        return 0
+    for item in pending:
+        print(f"{item.item_id}")
+        print(f"  {item.summary}")
+        for line in item.detail:
+            print(f"    - {line}")
+        print(f"  answers: {', '.join(d.value for d in item.permitted_decisions)}")
+    print(f"\n{len(pending)} model output(s) unvalidated. Nothing downstream of "
+            "them will run, and nothing will be deposited.")
+    print("answer one with: datadirector gate <job> --validate "
+           "<agent> --decision approve|edited|request-rerun --reviewer <orcid>"
+           " [--reason ...]")
+    return 0
+
+
+def _review_item_for(items, agent):
+    """The pending item for one agent, by agent name rather than by digest.
+
+    A person reading the screen knows which agent wrote the abstract, not what
+    its digest came out as. The digest stays in the identifier, where it keeps
+    doing its job.
+    """
+    for item in items:
+        from .gate import review as review_items
+        if review_items.agent_of(item.item_id) == agent:
+            return item
+    return None
+
+
 def cmd_advance(args) -> int:
     """Run whatever the job can run now, and say what it is waiting for."""
     from .pipeline import Pipeline
@@ -488,7 +586,8 @@ def cmd_serve(args) -> int:
     recorder = runtime_for_service.recorder
     service = JobService(store, recorder=recorder,
                          driver=runtime_for_service.repository,
-                         publication=runtime_for_service.agent_registry.get("publication"))
+                         publication=runtime_for_service.agent_registry.get("publication"),
+                         unpacked_root=runtime_for_service.unpacked_root)
 
     sessions = SessionStore(Path(wiring.storage.state_root).parent / "sessions.json")
     resolver = SessionResolver(sessions)
@@ -699,6 +798,13 @@ def main(argv: list[str] | None = None) -> int:
         "--policy", default=None,
         help="policy; defaults to config/policy.yaml, falling back to the "
              "example with a warning")
+    parser.add_argument(
+        "--env-file", default=None,
+        help="a file of NAME=VALUE lines read into the environment before the "
+              "command runs, for credentials the shell did not set (default: "
+              ".env in the working directory). A variable the shell already "
+              "exported wins over the file, and no value is ever printed.")
+
     sub = parser.add_subparsers(dest="command", required=True)
 
     sub.add_parser("check", help="validate configuration and report capabilities")
@@ -734,6 +840,32 @@ def main(argv: list[str] | None = None) -> int:
 
     p = sub.add_parser("advance", help="run what this job can run now")
     p.add_argument("job")
+
+    p = sub.add_parser(
+         "gate",
+        help="read what a model wrote that nobody has validated, and answer")
+    p.add_argument("job")
+    p.add_argument("--validate", default=None,
+                    metavar="AGENT",
+                    help="record a decision about this agent's model output")
+    p.add_argument("--decision", default="approve",
+                    choices=["approve", "edited", "request-rerun"],
+                    help="approve or edited validate what the model wrote; "
+                          "request-rerun does not — the draft stays unvalidated "
+                          "until the next one has been read")
+    p.add_argument("--reason", default=None,
+                    help="why the draft is wrong, in your own words. Required "
+                          "to ask for another attempt: without it the second "
+                          "draft is the first draft's procedure run again")
+    p.add_argument("--rerun", default=None, metavar="AGENT",
+                    help="run this agent again on the reason on the log")
+    p.add_argument("--note", default=None,
+                    help="what the reviewer says about the draft, recorded as "
+                          "the reviewer's own words and kept separate from the "
+                          "depositor's instruction")
+    p.add_argument("--reviewer", required=True,
+                    help="ORCID of the person answering. A review item that a "
+                          "model cleared is not reviewed")
 
     p = sub.add_parser("watch",
                        help="report settled submissions in the watched folder")
@@ -773,11 +905,21 @@ def main(argv: list[str] | None = None) -> int:
     args.wiring = resolve_config_path(args.wiring, "wiring")
     args.policy = resolve_config_path(args.policy, "policy")
 
+    # Credentials reach the process from the environment and from nowhere else, and
+    # `.env` is where a developer puts them. Read before dispatch, so every
+    # command sees the same environment: the broker reported the variable missing
+    # while a filled-in .env sat unread in the working directory, because nothing
+    # in this tree opened the file. Names are reported; values never are.
+    args.env_file = load_env_file(args.env_file)
+    for line in args.env_file.problems():
+        print(line, file=sys.stderr)
+
     handlers = {"check": cmd_check, "ingest": cmd_ingest, "status": cmd_status,
                 "verify": cmd_verify, "provenance": cmd_provenance,
                 "conformance": cmd_conformance, "serve": cmd_serve,
                 "retention": cmd_retention, "advance": cmd_advance, "watch": cmd_watch,
                 "session": cmd_session, "accounts": cmd_accounts,
+                  "gate": cmd_gate,
                 "openapi": cmd_openapi}
     try:
         return handlers[args.command](args)

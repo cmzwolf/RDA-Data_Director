@@ -156,6 +156,31 @@ class WorkflowGraph:
     def successors(self, name: str) -> list[Edge]:
         return [e for e in self.edges if e.source == name]
 
+    def predecessors(self, name: str) -> list[str]:
+        """The nodes that lead directly into this one."""
+        return [e.source for e in self.edges if e.target == name]
+
+    def ancestors(self, name: str) -> set[str]:
+        """Everything upstream of a node, transitively, excluding itself.
+
+        Walked from the node backwards over the edges, so the answer is a
+        property of the topology: an agent placed downstream of another
+        inherits whatever that node is waiting for, without any list of names
+        having to be updated when the graph changes. Asked of the graph rather
+        than computed at the gate for the same reason `reachable` is: a
+        predecessor list kept by hand is a list that goes stale silently.
+        """
+        seen: set[str] = set()
+        frontier = [name]
+        while frontier:
+            current = frontier.pop(0)
+            for source in self.predecessors(current):
+                if source in seen or source == self.ENTRY:
+                    continue
+                seen.add(source)
+                frontier.append(source)
+        return seen
+
     def reachable(self) -> set[str]:
         """Nodes with a path from the entry point, ignoring conditions.
 

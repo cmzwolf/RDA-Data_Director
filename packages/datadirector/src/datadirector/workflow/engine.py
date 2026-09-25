@@ -120,6 +120,22 @@ class WorkflowEngine:
         else:  # pragma: no cover - the loop always breaks or returns
             return self._halt(job_id, f"{step.name}: {last_error}")
 
+
+        return self._append_run(job_id, step, events, decision)
+
+    def run_step(self, job_id: str, step: Step) -> JobState:
+        """Run one named step, with the same recording as a first run.
+
+        A rerun has to leave the same trace as a first run — the events, the
+        completion, the decision — or a draft produced on request looks, in
+        the audit, like a draft that never happened. Splitting it out is what
+        lets a rerun reuse that path instead of approximating it.
+        """
+        state = self.state(job_id)
+        events, decision = step.run(state)
+        return self._append_run(job_id, step, events, decision)
+
+    def _append_run(self, job_id: str, step: Step, events, decision) -> JobState:
         for ev in events:
             self.store.append(ev)
 

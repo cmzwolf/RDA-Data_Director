@@ -8,6 +8,8 @@ any particular route.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 pytest.importorskip("fastapi", reason="pip install -e 'packages/datadirector[api]'")
@@ -15,7 +17,8 @@ pytest.importorskip("fastapi", reason="pip install -e 'packages/datadirector[api
 from fastapi.testclient import TestClient  # noqa: E402
 
 from datadirector_contracts import (  # noqa: E402
-    GateItem, GateItemKind, ItemDecision, Orcid, SensitivityClass,
+    DepositReceipt, GateItem, GateItemKind, ItemDecision, Orcid,
+    SensitivityClass,
 )
 
 from datadirector.api.app import build_app  # noqa: E402
@@ -471,3 +474,201 @@ def test_the_owners_endpoint_shows_who_granted_what(owned_client, researcher,
     assert body["sole_owned"] is False
     granted = [g for g in body["grants"] if g["granted_by"]]
     assert granted[0]["reason"] == "covering leave"
+
+
+# -- what a deposit actually publishes -------------------------------------
+#
+# Both entry points name artefacts as the log recorded them, and only the
+# deployment knows which directory those names sit under. When neither supplied
+# one, the driver was offered an empty list and the publication agent read that
+# as a researcher who had withheld every file — so a job whose every gate item
+# had been decided answered a press of Publish with a 500.
+
+
+class _Depository:
+    """A repository driver that reports what it was asked to publish.
+
+    The claim worth testing is *which* files reach the repository, so the
+    driver is a stand-in and the event log decides.
+    """
+    base_url = "https://sandbox.invalid"
+
+    def __init__(self) -> None:
+        self.attempts: list[dict] = []
+
+    def deposit(self, job_id, record, artefacts, *, on_behalf_of):
+        self.attempts.append({"record": record,
+                               "paths": [Path(p) for p in artefacts],
+                               "on_behalf_of": on_behalf_of})
+        return DepositReceipt(
+            pid="10.5072/zenodo.42", concept_pid="10.5072/zenodo.1",
+            landing_page="https://sandbox.invalid/records/42",
+            deposited_at="2026-09-23T00:00:00Z")
+
+
+def _unpacked(work):
+    """Where ingestion wrote this job's material.
+
+    Handed to the service the way `serve` hands it over: the
+    runtime owns the layout, and nothing else spells it out.
+    """
+    return lambda job_id: work / job_id / "unpacked"
+
+
+def _wired_service(tmp_path, researcher, driver):
+    """A service wired the way `serve` wires one.
+
+    The three things the command line passes and the broken deployment lacked:
+    the publication agent that holds the refusals, the driver, and the working
+    root that the log's artefact names are relative to.
+    """
+    from datadirector.agents.publication import PublicationAgent
+
+    store = EventStore(tmp_path / "state")
+    work = tmp_path / "work"
+    service = JobService(store, recorder=Recorder(store, tmp_path / "prov"),
+                          driver=driver, unpacked_root=_unpacked(work),
+                          publication=PublicationAgent(driver, work,
+                                                        store=store))
+    client = TestClient(build_app(service,
+                                   resolve_principal=lambda a: researcher))
+    return service, client, work
+
+
+def _create(client) -> str:
+    return client.post("/jobs",
+                        headers={"Authorization": TOKEN}).json()["job_id"]
+
+
+def _registered(service, work, job_id, artefacts, *,
+                creator="Aroa, Miriam") -> None:
+    """Put material and a drafted record into one job's log."""
+    import json
+
+    from datadirector_contracts import (
+        CanonicalRecord, Creator, Event, EventKind, ResourceType,
+     )
+
+    unpacked = work / job_id / "unpacked"
+    for name in artefacts:
+        target = unpacked / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("station,temp\nS14,4.1\n", encoding="utf-8")
+    service.store.append(Event(
+        sequence=1, job_id=job_id, kind=EventKind.MATERIAL_REGISTERED,
+        agent="ingestion/0.1.0",
+        payload={"artefacts": list(artefacts), "file_count": len(artefacts)}))
+    record = CanonicalRecord(title="Surface temperature series",
+                              creators=[Creator(name=creator)],
+                              publication_year=2026,
+                              resource_type=ResourceType.DATASET)
+    service.store.append(Event(
+        sequence=1, job_id=job_id, kind=EventKind.METADATA_DRAFTED,
+        agent="metadata/0.1.0",
+        payload={"record": json.loads(record.model_dump_json())}))
+
+
+def _withheld(researcher, service, job_id, artefact) -> None:
+    """One artefact, refused by a named person at the gate."""
+    item_id = f"uninspected:{artefact}"
+    service.add_gate_items(job_id, [GateItem(
+        item_id=item_id, kind=GateItemKind.UNINSPECTED_FILE,
+        artefact=artefact,
+        summary=f"{artefact} was not inspected (no-capable-backend). "
+                   "Treated as sensitive by presumption.",
+        detail=["not inspected: no-capable-backend"],
+        permitted_decisions=[ItemDecision.PUBLISH_AS_IS,
+                              ItemDecision.EXCLUDE_FROM_DEPOSIT])])
+    service.resolve(job_id, item_id, ItemDecision.EXCLUDE_FROM_DEPOSIT,
+                    human=researcher)
+
+
+def _publish(client, job_id):
+    return client.post(f"/jobs/{job_id}/deposit",
+                        json={"repository": "zenodo",
+                                 "confirm_irreversible": True},
+                        headers={"Authorization": TOKEN})
+
+
+def _uploaded(driver, work, job_id) -> list[str]:
+    unpacked = work / job_id / "unpacked"
+    return [p.relative_to(unpacked).as_posix()
+             for p in driver.attempts[-1]["paths"]]
+
+
+def test_a_deposit_publishes_the_material_named_in_the_log(tmp_path,
+                                                            researcher):
+    """The files that leave the institution are the ones the log registered.
+
+    Not the ones the caller happened to mention — and, before this, what the
+    caller mentioned was none at all.
+    """
+    driver = _Depository()
+    service, client, work = _wired_service(tmp_path, researcher, driver)
+    job_id = _create(client)
+    _registered(service, work, job_id, ["data/obs.csv"])
+
+    response = _publish(client, job_id)
+
+    assert response.status_code == 200, response.text
+    assert response.json()["pid"] == "10.5072/zenodo.42"
+    assert len(driver.attempts) == 1
+    assert _uploaded(driver, work, job_id) == ["data/obs.csv"]
+    assert driver.attempts[0]["record"].title == "Surface temperature series"
+    assert driver.attempts[0]["on_behalf_of"] == researcher
+
+
+def test_a_file_withheld_under_its_directory_is_not_uploaded(tmp_path,
+                                                              researcher):
+    """An exclusion recorded as `data/obs.csv` covers `data/obs.csv`.
+
+    Comparing the gate's name against a bare basename matched nothing for
+    anything submitted inside an archive, so the file a researcher withheld was
+    the file that got published.
+    """
+    driver = _Depository()
+    service, client, work = _wired_service(tmp_path, researcher, driver)
+    job_id = _create(client)
+    _registered(service, work, job_id, ["data/obs.csv", "data/notes.md"])
+    _withheld(researcher, service, job_id, "data/obs.csv")
+
+    response = _publish(client, job_id)
+
+    assert response.status_code == 200, response.text
+    assert _uploaded(driver, work, job_id) == ["data/notes.md"]
+    deposited = [e for e in service.events(job_id)
+                  if e.kind.value == "deposit.completed"]
+    assert deposited[0].payload["excluded"] == ["data/obs.csv"]
+
+
+def test_withholding_every_file_closes_the_job_rather_than_failing(
+        tmp_path, researcher):
+    """Publishing nothing is a decision honoured, and the API answers it 200.
+
+    The agent refuses to upload nothing, which is right. What was wrong is that
+    the refusal reached a browser as an unhandled exception on a job whose every
+    gate item had been decided.
+    """
+    driver = _Depository()
+    service, client, work = _wired_service(tmp_path, researcher, driver)
+    job_id = _create(client)
+    _registered(service, work, job_id, ["data/obs.csv"])
+    _withheld(researcher, service, job_id, "data/obs.csv")
+
+    response = _publish(client, job_id)
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["pid"] is None
+    assert body["nothing_to_deposit"] is True
+    assert not driver.attempts
+
+    kinds = [e.kind.value for e in service.events(job_id)]
+    assert "workflow.closed-not-shared" in kinds
+    assert "deposit.completed" not in kinds
+    recorded = (tmp_path / "prov" / job_id / "decisions.jsonl").read_text()
+    assert "closed-not-shared" in recorded, (
+           "the only irreversible act in the system should not be the one whose"
+           " basis goes unrecorded")
+
+

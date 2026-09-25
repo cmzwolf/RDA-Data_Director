@@ -87,7 +87,7 @@ from ..care.referral import detect as detect_care
 from ..gate.items import care_referral_item
 from ..profiling.structural import profile_tree
 from ..workflow.graph import Condition
-from .base import Capabilities, Invocation, Outcome
+from .base import Capabilities, Invocation, LlmOutput, Outcome
 from .registry import AgentContext, register_agent
 
 @register_agent
@@ -299,6 +299,14 @@ class ClassificationAgent(Agent):
             summary=("forms a provisional view of what is sensitive from "
                      "names, structure, metadata and probed content"),
             needs_backend=ModelCapability.TEXT_GENERATION,
+            llm_output=LlmOutput(
+                "the sensitivity view and the reasons for it",
+                produces=(EventKind.CLASSIFICATION_COMPLETED,),
+                editable=False,
+                edit_note="a person may not write their own level here: the "
+                "projection only ever tightens a sensitivity view, so an "
+                "approval that loosened it would mean nothing. Say what is "
+                "wrong and ask again, or exclude the file at the gate."),
             human_follows=True,
             establishes=(
                 Condition("a provisional sensitivity view exists",

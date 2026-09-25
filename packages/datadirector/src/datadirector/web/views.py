@@ -35,9 +35,12 @@ from ..api.service import JobService
 from ..errors import AuthorityError, CredentialError
 from ..identity.session import COOKIE_NAME
 from .narrate import describe
+from .markdown import render_markdown
 from .progress import PHASES, events_in_phase, phases_for
 from . import recordedit
 from ..state.projection import fold
+from ..gate.items import PROPOSAL_WORDS
+from ..gate import review as review_items
 
 TEMPLATES = Path(__file__).parent / "templates"
 STATIC = Path(__file__).parent / "static"
@@ -48,20 +51,41 @@ STATIC = Path(__file__).parent / "static"
 REASON_REQUIRED = {
     ItemDecision.PUBLISH_AS_IS: "publishing without inspection",
     ItemDecision.CONSULTED: "recording a consultation",
+    ItemDecision.REQUEST_RERUN: "asking for another attempt",
 }
 
 DECISION_LABELS = {
-    ItemDecision.APPROVE: "Approve this change",
-    ItemDecision.REJECT: "Reject this change",
+    ItemDecision.APPROVE: "Accept this proposal",
+    ItemDecision.REJECT: "Reject this proposal",
     ItemDecision.PUBLISH_AS_IS: "Publish it anyway, uninspected",
     ItemDecision.EXCLUDE_FROM_DEPOSIT: "Leave it out of the deposit",
     ItemDecision.CLASSIFY_SENSITIVE: "Treat the job as sensitive",
     ItemDecision.INSPECTED_EXTERNALLY: "I inspected it myself",
     ItemDecision.CONSULTED: "I consulted the community or governance body",
     ItemDecision.NOT_APPLICABLE: "This does not apply here",
+       # What a reviewer can do about a model's draft. The third is not a
+       # validation, and the label has to say so on the button: the earlier
+       # screen invited a person to "retry" and let the rejected draft flow
+       # downstream, because every recorded decision looked like an approval.
+    ItemDecision.EDITED: "I have written my own version of it",
+    ItemDecision.REQUEST_RERUN: "Ask it to write again (this draft stays "
+                                   "unvalidated)",
 }
 
 PRESUMPTION_MARKERS = ("not inspected", "presumed", "presumption")
+
+# What the job page says after an action settled its outcome, keyed by the query
+# parameter the redirect carries. A deposit that published nothing because the
+# researcher withheld every file is a decision honoured, and it has to be said in
+# those terms: the alternative was an unhandled exception, which reads to a
+# researcher as a tool breaking on them rather than as their own choice carried
+# through.
+NOTICES = {
+    "nothing-to-deposit":
+         "Nothing was published. Every file was excluded at the review gate, so "
+         "this job has been closed without a persistent identifier. Nothing has "
+         "left this machine, and the material is still where it was.",
+}
 
 
 class WebInterface:
@@ -88,7 +112,9 @@ def templates_for() -> Jinja2Templates:
     else; a login screen that looked like a different application would be the
     first thing a visitor saw.
     """
-    return Jinja2Templates(directory=str(TEMPLATES))
+    templates = Jinja2Templates(directory=str(TEMPLATES))
+    templates.env.filters["md"] = render_markdown
+    return templates
 
 
 def build_web(app: FastAPI, service: JobService, *, pipeline=None,
@@ -99,7 +125,9 @@ def build_web(app: FastAPI, service: JobService, *, pipeline=None,
               resolve_principal: Callable[[str | None], Orcid],
               resolve_roles: Callable[[str | None], set] | None = None,
               repository: str = "zenodo") -> FastAPI:
-    templates = Jinja2Templates(directory=str(TEMPLATES))
+    # The same environment as the sign-in pages, so the `md` filter is
+    # registered once and every page has it.
+    templates = templates_for()
     app.mount("/static", StaticFiles(directory=str(STATIC)), name="static")
 
     def caller(request: Request) -> Caller:
@@ -284,13 +312,14 @@ def build_web(app: FastAPI, service: JobService, *, pipeline=None,
         state = service.state(job_id)
         shown = events_in_phase(events, phase) if phase else events
         label = next((lbl for key, lbl, _ in PHASES if key == phase), None)
+        unresolved = len(service.gate(job_id).unresolved())
         return render(request, "history.html", caller=who, job_id=job_id,
                       entries=[{"at": e.occurred_at, "told": describe(e)}
                                for e in shown],
                       phase=phase, phase_label=label,
+                      gate_unresolved=unresolved,
                       phases=phases_for(events, state,
-                                        unresolved=len(
-                                            service.gate(job_id).unresolved())),
+                                        unresolved=unresolved),
                       total=len(events))
 
     @app.get("/ui/submit", response_class=HTMLResponse, tags=["ui"])
@@ -396,6 +425,7 @@ def build_web(app: FastAPI, service: JobService, *, pipeline=None,
             and ownership.owned_by(who.orcid)
         ready_to_publish = _ready_to_publish(pipeline, state, gate, job_id,
                                              ownership.owned_by(who.orcid))
+        notice = NOTICES.get(request.query_params.get("notice", ""))
         return render(request, "job.html", caller=who,
                       job=_summary(service, job_id),
                       ownership=_ownership_view(ownership),
@@ -403,6 +433,7 @@ def build_web(app: FastAPI, service: JobService, *, pipeline=None,
                                         unresolved=len(gate.unresolved())),
                       can_advance=can_advance,
                       ready_to_publish=ready_to_publish,
+                      notice=notice,
                       events=events)
 
     @app.post("/ui/jobs/{job_id}/owners", tags=["ui"])
@@ -468,6 +499,21 @@ def build_web(app: FastAPI, service: JobService, *, pipeline=None,
         except ValueError:
             raise HTTPException(status_code=422,
                                 detail="Unknown decision.") from None
+        if pipeline is not None and review_items.agent_of(item_id) is not None:
+            # A decision about what a model wrote goes through the pipeline,
+            # not the core service, for one reason: asking for another attempt
+            # has to run the agent again. Both entry points reach the same
+            # `Gate.resolve`, so neither can accept what the other would refuse.
+            agent = review_items.agent_of(item_id)
+            if chosen is ItemDecision.REQUEST_RERUN:
+                pipeline.request_rerun(job_id, agent, human=who.orcid,
+                                       note=reason.strip())
+            else:
+                pipeline.resolve_review(job_id, item_id, chosen,
+                                          human=who.orcid,
+                                          reason=reason.strip() or None)
+            return RedirectResponse(f"/ui/jobs/{job_id}/gate",
+                                    status_code=303)
         service.resolve(job_id, item_id, chosen, human=who.orcid,
                         reason=reason.strip() or None)
         return RedirectResponse(f"/ui/jobs/{job_id}/gate", status_code=303)
@@ -504,7 +550,15 @@ def build_web(app: FastAPI, service: JobService, *, pipeline=None,
             raise HTTPException(
                 status_code=428,
                 detail="Publishing cannot be undone; confirm to proceed.")
-        service.deposit(job_id, human=who.orcid, repository=repository)
+        result = service.deposit(job_id, human=who.orcid, repository=repository)
+        if result.get("nothing_to_deposit"):
+              # The researcher withheld every file. That is a decision honoured,
+              # not a failure, so the job page says what happened rather than the
+              # request ending in an unhandled exception over an upload list that
+              # came out empty.
+            return RedirectResponse(
+                f"/ui/jobs/{job_id}?notice=nothing-to-deposit",
+                status_code=303)
         return RedirectResponse(f"/ui/jobs/{job_id}", status_code=303)
 
     # -- metadata review and correction ---------------------------------
@@ -790,7 +844,7 @@ def _item_view(item, resolution) -> dict:
         "slug": re.sub(r"[^a-z0-9]+", "-", item.item_id.lower()).strip("-"),
         "kind": item.kind.value,
         "artefact": item.artefact,
-        "summary": item.summary,
+        "summary": _display_summary(item),
         "detail": detail,
         "permitted_decisions": [d.value for d in item.permitted_decisions],
         "decision_labels": {d.value: DECISION_LABELS.get(d, d.value)
@@ -807,6 +861,31 @@ def _item_view(item, resolution) -> dict:
     }
 
 
+
+def _display_summary(item) -> str:
+    """The item's summary, with any bare treatment verb removed.
+
+    Gate items are persisted in the log as they were first worded, so a
+    proposal logged under an older format would still read as a verb the
+    tool performs ("pseudonymise"). Where a proposal is present the line
+    is rebuilt from it in the conditional, as the history page rebuilds
+    its lines.
+    """
+    proposal = getattr(item, "proposal", None)
+    if proposal is None:
+        return item.summary
+    treatment = getattr(proposal.treatment, "value",
+                        str(proposal.treatment)).lower()
+    words = PROPOSAL_WORDS.get(
+        treatment, f"a redaction made outside this tool would apply the "
+        f"treatment '{treatment}' to the values")
+    reason = getattr(proposal.reason_code, "value",
+                     str(proposal.reason_code))
+    return (f"Proposal for {proposal.artefact} · {proposal.location}: "
+            f"{words} (reason: {reason}). This tool edits no file; the "
+            f"decision you record is your answer to the proposal")
+
+
 def _presumed_level(detail: list[str]) -> str | None:
     for line in detail:
         match = re.search(r"presumed (\w+)", line.lower())
@@ -821,7 +900,9 @@ def _confidence(item) -> float | None:
 
 
 def _diff(item) -> list[dict]:
-    """A field-level diff where a value would change.
+    """A field-level sketch of what a proposal describes.  No value is changed
+    by this tool - the table names what an edit made outside it would cover.
+
 
     "Redact column 3" is not reviewable; showing what a value is and what it
     would become is. Only a proposal carries enough to build one.
@@ -830,17 +911,17 @@ def _diff(item) -> list[dict]:
     if proposal is None:
         return []
     return [{"location": proposal.location,
-             "before": getattr(proposal, "before", "current value"),
+             "before": getattr(proposal, "before", "the value, as it stands, untouched"),
              "after": _after(proposal)}]
 
 
 def _after(proposal) -> str:
     treatment = getattr(proposal.treatment, "value", str(proposal.treatment))
     return {
-        "suppress": "(removed)",
-        "generalise": "(a broader category)",
-        "pseudonymise": "(a stable code)",
-        "coarsen": "(reduced precision)",
+        "suppress": "(values removed)",
+        "generalise": "(values replaced by a broader category)",
+        "pseudonymise": "(values replaced by a stable non-identifying code)",
+        "coarsen": "(values reduced in precision)",
     }.get(treatment, treatment)
 
 

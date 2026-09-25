@@ -76,7 +76,16 @@ def _imports(path: Path, package: str) -> set[str]:
                 else base
             prefix = "/".join(p for p in climbed if p)
             target = node.module.replace(".", "/")
-            out.add(f"{prefix}/{target}" if prefix else target)
+            here = f"{prefix}/{target}" if prefix else target
+            out.add(here)
+            for alias in node.names:
+                 # `from .gate import review` imports the *module* `gate/review`,
+                 # not an object inside `gate`. A checker that adds only `gate`
+                 # reports a plainly-imported module as an orphan, which is the
+                 # same false verdict this file exists to prevent in the other
+                 # direction. Unresolved candidates are discarded, so naming a
+                 # class here cannot invent an edge.
+                out.add(f"{here}/{alias.name}")
         elif node.module.startswith("datadirector."):
             out.add(node.module.split("datadirector.", 1)[1].replace(".", "/"))
     return out

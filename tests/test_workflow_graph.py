@@ -365,7 +365,7 @@ def test_the_whole_automatic_chain_runs(runtime, tmp_path, monkeypatch):
     import zipfile
 
     from datadirector_contracts import (
-        Digest, Event, EventKind, ModelCapability, ModelResponse, Orcid,
+        Digest, Event, EventKind, ItemDecision, ModelCapability, ModelResponse, Orcid,
         PolicyConfig, Residency, SensitivityClass,
     )
 
@@ -416,7 +416,23 @@ def test_the_whole_automatic_chain_runs(runtime, tmp_path, monkeypatch):
         payload={"sensitivity": 2}))
 
     pipeline.advance(result.job_id)
-    completed = pipeline.completed(result.job_id)
 
+       # Everything between the declaration and the review runs without a
+       # person — provided a person has read what the model wrote first. The
+       # loop is the workflow as it now works: an agent whose model wrote prose
+       # is held until a named person validates it, so the chain is walked by
+       # alternating between running and reading. Had this been left asserting
+       # the old behaviour, the review gate would have had to be weakened to
+       # keep the test green.
+    for _ in range(12):
+        pending = pipeline.pending_reviews(result.job_id)
+        if not pending:
+            break
+        for item in pending:
+            pipeline.resolve_review(result.job_id, item.item_id,
+                                     ItemDecision.APPROVE, human=Orcid(value="0009-0000-0000-0017"))
+        pipeline.advance(result.job_id)
+
+    completed = pipeline.completed(result.job_id)
     for node in ("classification", "metadata", "documentation", "validation"):
         assert node in completed, f"{node} never ran"

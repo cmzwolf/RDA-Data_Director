@@ -3,7 +3,7 @@
 {% block content %}
 <h1>Review and publish {{ job_id }}</h1>
 
-{# The point of this screen is that a researcher sees what they are about to
+  {# The point of this screen is that a researcher sees what they are about to
    publish — the record as well as the files — and sees why a publish would be
    refused here, rather than after pressing publish and being told no. #}
 
@@ -39,7 +39,17 @@
   <dt>Publisher</dt><dd>{{ record.publisher or 'assigned by the repository' }}</dd>
   <dt>Resource type</dt><dd>{{ record.resource_type.value }}</dd>
   {% for d in record.descriptions %}
-  <dt>{{ d.kind }}</dt><dd>{{ d.text }}</dd>
+   {# The drafted overview and methods are documentation in the
+      plain-text sense: the agent writes them in sections, and the
+      repository renders this field as markdown once published. Shown
+      here as raw text, a person is asked to approve a record whose
+      structure they cannot see - "## Collection" and "- Riverbank: 14"
+      are not what anyone reads on the published page. `md` escapes
+      before it interprets (web/markdown.py), so rendering the draft
+      carries no more risk than escaping it did, whatever the model was
+      induced to write. The short fields around these are values rather
+      than prose - title, licence, keywords - and stay as they were. #}
+  <dt>{{ d.kind }}</dt><dd class="drafted">{{ d.text | md }}</dd>
   {% endfor %}
   {% if record.subjects %}
   <dt>Keywords</dt>
@@ -89,7 +99,7 @@
   {% for name in uploading %}<li>{{ name }}</li>{% endfor %}
 </ul>
 
-{# What will NOT be uploaded matters as much: a researcher who believed a file
+  {# What will NOT be uploaded matters as much: a researcher who believed a file
    was included and finds later that it was not has been misled by an omission. #}
 <h2>What will not be published</h2>
 {% if excluded %}
@@ -115,7 +125,7 @@
 
 <form method="post" action="/ui/jobs/{{ job_id }}/deposit">
   <div class="choice">
-    {# Unchecked, and the submit button is not focused: reaching this page by
+  {# Unchecked, and the submit button is not focused: reaching this page by
        accident should not be enough to publish. #}
     <input type="checkbox" id="confirm" name="confirm_irreversible" value="yes" required>
     <label for="confirm">I understand that publishing cannot be undone.</label>

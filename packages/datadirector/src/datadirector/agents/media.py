@@ -62,7 +62,7 @@ CAPABILITY_FOR = {"image": ModelCapability.VISION, "audio": ModelCapability.AUDI
 
 from ..gate.items import from_media_findings
 
-from .base import Capabilities, Invocation, Outcome
+from .base import Capabilities, Invocation, LlmOutput, Outcome
 from .registry import AgentContext, register_agent
 
 @register_agent
@@ -290,6 +290,15 @@ class MediaAgent(Agent):
             summary=("looks at images and audio with a vision backend, "
                      "because no text pipeline will ever see them"),
             needs_backend=ModelCapability.VISION,
+            llm_output=LlmOutput(
+                 "what each image and recording is said to show, and what its "
+                 "embedded metadata is said to say",
+                produces=(EventKind.CLASSIFICATION_COMPLETED,),
+                editable=False,
+                edit_note="what a model claims an image shows is not something "
+                 "to retype into the record. If the description is wrong, say "
+                 "so and ask again; if the file should not be published, "
+                 "exclude it at the gate."),
             human_follows=True,
             inspects_material=True,
             serves=("C2",))

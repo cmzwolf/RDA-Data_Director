@@ -29,11 +29,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from datadirector_contracts import (
-    Event, EventKind, GateItem, Orcid, SensitivityClass,
+    Event, EventKind, GateItem, ItemDecision, Orcid, Resolution,
+    SensitivityClass,
 )
 
 from .care.referral import detect as detect_care
+from .errors import AuthorityError
 from datadirector_contracts import GateItemKind
+from .gate import review as review_items
 from .gate.items import care_referral_item, discrepancy_item
 from .repository_choice import (
     confirmation_item, divergence_item, from_instruction, from_plan,
@@ -82,6 +85,10 @@ class _GraphStep:
         self._pipeline = pipeline
         self._node = node
         self.name = node.name
+         # Set only for the duration of `Pipeline.request_rerun`: what a
+         # reviewer said about the previous draft. It reaches the agent as
+         # `Instruction.review_note`, never as the depositor's own words.
+        self.review_note: str | None = None
         self._agent = pipeline.runtime.agent_registry.get(
             node.agent or node.name)
 
@@ -97,31 +104,48 @@ class _GraphStep:
         candidate = self._pipeline.graph.next_node(state, done=done)
         if candidate is None or candidate.name != node.name:
             return False
+        if self._held_by_upstream(state.job_id, node.name):
+              # An agent upstream still has prose that nobody has read.
+              # Running this node would not use that prose, but it would mark
+              # the node done, and the moment a person approves the draft the
+              # workflow would treat everything built on it as settled. So the
+              # node waits, and the item says who is being waited for.
+            return False
         return all(condition(state)
                     for condition in self._agent.capabilities().requires)
+
+    def _held_by_upstream(self, job_id, name):
+        """Which unvalidated outputs stand between the entry and this node.
+
+        Asked of the graph rather than of a list of agent names, so that
+        adding a node cannot leave a hole in the rule: the block is a property
+        of the edges, and a new agent that reads what a model wrote is behind
+        the metadata node by construction. `ancestors` is reflexive here —
+        a node holding its own unvalidated draft has nowhere further to go.
+        """
+        pending = review_items.pending_agents(
+            self._pipeline.runtime.store.load(job_id))
+        if not pending:
+            return set()
+        return pending & (self._pipeline.graph.ancestors(name) | {name})
 
     def run(self, state):
         handle = self._pipeline.handle_for(self._agent, state.job_id)
         outcome = self._agent.run(
             Invocation(job=handle, instruction=self._instruction(state)))
         events = list(outcome.events)
-        known = {item.item_id for item
-                  in log_items(self._pipeline.runtime.store.load(
-                         state.job_id))}
-        items = [item for item in outcome.gate_items
-                  if item.item_id not in known]
-        if items:
-               # The agent reports what it would assert; the orchestrator
-               # is the only thing that appends, and it appends on the
-               # agent's behalf with the agent's identity attached.
-            events.append(Event(
-                sequence=1, job_id=state.job_id,
-                kind=EventKind.REDACTION_PROPOSED,
-                agent=self._agent.identity,
-                payload={"marker": "gate.items-added",
-                          "items": [json.loads(i.model_dump_json())
-                                    for i in items]}))
+        items = list(outcome.gate_items)
+        review = review_items.claimed_review(self._agent, state.job_id, outcome)
+        if review is not None:
+            items = items + [review]
+        # The agent reports what it would assert; the orchestrator is the only
+        # thing that appends, and it appends on the agent's behalf with the
+        # agent's identity attached. One builder for that shape, because the
+        # gate reads one marker and a variant of it reads as an absence.
+        events += self._pipeline.gate_item_events(
+            state.job_id, self._agent.identity, items)
         return events, outcome.decision
+
 
     def _instruction(self, state):
         """The depositor's instruction, from the entry point that
@@ -134,8 +158,10 @@ class _GraphStep:
             if (event.kind is EventKind.INSTRUCTIONS_RECEIVED
                     and event.payload.get("channel")
                       == "authenticated-depositor"
-                    and event.payload.get("instruction")):
+                    and event.payload.get("instruction")
+                    and not event.payload.get("purpose")):
                 return Instruction(
+                    review_note=self.review_note,
                     text=event.payload["instruction"],
                     author=Authority.DEPOSITOR,
                     recorded=event.sequence)
@@ -238,6 +264,12 @@ class Pipeline:
                                                      commitments, human)
         result.gate_items += self._schema_choice(job_id, instruction,
                                                  commitments, human)
+        # On the log, not only in the return value: an item that a
+        # caller prints and never appends is invisible to the gate
+        # screen, to the deposit check, and to every process started
+        # after the one that raised it.
+        self.record_gate_items(job_id, result.gate_items,
+            agent="pipeline/0.1.0")
         return result
 
     def _repository_choice(self, job_id: str, instruction: str | None,
@@ -543,12 +575,144 @@ class Pipeline:
               # that has not been made must not look like one that found nothing.
             return []
 
-        discrepancies, _, _ = agent.verify(state, commitments, record,
+        discrepancies, verify_events, _ = agent.verify(
                                            repository=chosen,
                                            structured=structured)
+# The verification's own findings belong on the log. They were built
+# here and dropped, which left "the plan says this will not be shared"
+# a fact living only in one function's local variables: the retention
+# policy and the operator's report both read the log and found nothing to
+# read. Appended once, because `advance` runs again on every poll, and a
+# second copy of the same finding would read as a second finding.
+        recorded = {event.kind for event in events}
+        for event in verify_events:
+            if event.kind not in recorded:
+                runtime.store.append(event)
         return _plan_discrepancy_items(discrepancies)
 
     # -- advancing ---------------------------------------------------------
+
+    def gate_item_events(self, job_id: str, agent: str,
+                          items: list[GateItem]) -> list[Event]:
+        """The log entries that put assertions in front of a person.
+
+        The only place that shape is built, because the marker the gate reads
+        was otherwise assembled in three places, and a variant of it is a
+        decision that reads as an absence. Items already on the log are left
+        out: an unchanged discrepancy that demanded a fresh decision on every
+        advance would train a person to click without reading.
+        """
+        if not items:
+            return []
+        known = {item.item_id
+                  for item in log_items(self.runtime.store.load(job_id))}
+        fresh = [item for item in items if item.item_id not in known]
+        if not fresh:
+            return []
+        return [Event(
+            sequence=1, job_id=job_id, kind=EventKind.REDACTION_PROPOSED,
+            agent=agent,
+            payload={"marker": "gate.items-added",
+                       "items": [json.loads(item.model_dump_json())
+                                  for item in fresh]})]
+
+    def record_gate_items(self, job_id: str, items: list[GateItem], *,
+                          agent: str) -> list[GateItem]:
+        """Append an agent's assertions, and return what is unresolved.
+
+        Appended on the agent's behalf with the agent's identity attached, so
+        the log says whose claim it is and that the orchestrator, not the
+        agent, wrote it. An assertion that exists only in a returned value is
+        an assertion no later reader will ever see: the gate screen, the
+        deposit check and the audit trail all read the log.
+        """
+        for event in self.gate_item_events(job_id, agent, items):
+            self.runtime.store.append(event)
+        return log_items(self.runtime.store.load(job_id))
+
+    def pending_reviews(self, job_id: str) -> list[GateItem]:
+        """What a model wrote that no named person has validated yet.
+
+        Read from the log, so a restarted process is still holding the same
+        drafts rather than running on as though nobody had objected.
+        """
+        return review_items.pending(self.runtime.store.load(job_id))
+
+    def resolve_review(self, job_id: str, item_id: str, decision, *,
+                        human: Orcid, reason: str | None = None) -> Resolution:
+        """One person's answer about one model draft, decided by the gate.
+
+        `Gate.resolve` supplies the rules — a permitted decision, a reason
+        where one is owed — so a command line cannot approve what the browser
+        would refuse. Asking for another attempt clears nothing: the draft
+        stays unvalidated until `request_rerun` has produced a second one that
+        somebody has read.
+        """
+        gate = review_items.review_gate(self.runtime.store.load(job_id))
+        resolution = gate.resolve(item_id, decision, human=human, reason=reason)
+        agent = review_items.agent_of(item_id) or "pipeline/0.1.0"
+        self.runtime.store.append(review_items.decision_event(
+            job_id, item_id, decision, human, reason, agent))
+        return resolution
+
+    def request_rerun(self, job_id: str, agent_name: str, *, human: Orcid,
+                      note: str) -> Advance:
+        """One agent writes its draft again, on what the reviewer said.
+
+        The request is recorded before the work happens, so a person who
+        pressed the button has an entry on the log whether or not the model
+        answers. The note belongs to the reviewer: it is recorded on the
+        authenticated channel with a purpose of its own, and reaches the prompt
+        separately from the depositor's instruction, which stays verbatim.
+
+        What comes back is a second draft beside the first, never in place of
+        it, with a review item bound to its own digest. Asking again clears
+        nothing: the item for the draft being replaced stays unresolved until
+        the replacement has been read, so there is no moment at which an
+        unvalidated draft is the only thing standing between this job and a
+        deposit.
+         """
+        events = self.runtime.store.load(job_id)
+        item = next((i for i in review_items.pending(events)
+                      if review_items.agent_of(i.item_id) == agent_name), None)
+        if item is None:
+            raise AuthorityError(
+                f"{agent_name} has no model draft waiting for another attempt")
+        if not (note or "").strip():
+            raise AuthorityError(
+                  "asking for another attempt requires saying what was wrong. "
+                  "Without those words the second draft is the first draft's "
+                  "procedure run again, and the reviewer would be waiting for a "
+                  "correction nobody asked for")
+        agent = self.runtime.agent_registry.get(agent_name)
+        self.resolve_review(job_id, item.item_id, ItemDecision.REQUEST_RERUN,
+                             human=human, reason=note)
+        self.runtime.store.append(review_items.review_note_event(
+            job_id, agent_name, note, human, agent.identity))
+
+        name = next((node.name for node in self.graph.nodes.values()
+                      if (node.agent or node.name) == agent_name), None)
+        if name is None:
+            raise AuthorityError(
+                 f"no graph node is performed by {agent_name}, so there is "
+                   "nothing to run again")
+        step = next((s for s in self.engine.steps if s.name == name), None)
+        if step is None:
+            raise AuthorityError(f"{name} is not a step the engine can run")
+        before = {event.sequence
+                    for event in self.runtime.store.load(job_id)}
+        step.review_note = note
+        try:
+            state = self.engine.run_step(job_id, step)
+        finally:
+            step.review_note = None
+        fresh = [event for event in self.runtime.store.load(job_id)
+                  if event.sequence not in before]
+        return Advance(job_id=job_id, ran=[name], events=fresh,
+                        gate_items=self.pending_reviews(job_id),
+                        unavailable=self.runtime.unavailable(),
+                        awaiting=state.halted_reason)
+
 
     def advance(self, job_id: str, *, human: Orcid | None = None) -> Advance:
         """Run what can be run, and say what is wanted when it cannot.
@@ -562,7 +726,10 @@ class Pipeline:
         runtime = self.runtime
         state = fold(runtime.store.load(job_id))
         result = Advance(job_id=job_id, unavailable=runtime.unavailable())
-        result.gate_items += self._plan_discrepancies(job_id, state)
+        result.gate_items += self.record_gate_items(
+            job_id, self._plan_discrepancies(job_id, state),
+            agent=runtime.agent_registry.get("dmp").identity)
+
 
         before = state.step
         state = self.engine.run_until_blocked(job_id)

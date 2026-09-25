@@ -8,7 +8,8 @@ and approved item by item is not autonomous.
 The mechanism enforces that reading rather than relying on it:
 
   - the agent produces proposals, and has no method that applies one;
-  - approved items are written to a NEW artefact, never over the original;
+  - nothing in this system applies one: no code path masks, removes or
+    rewrites a value in any file;
   - the human decides per item, and there is no bulk accept anywhere.
 
 The system never decides what is sensitive. It decides what to show a human,
@@ -99,9 +100,9 @@ class RedactionAgent(Agent):
             agent=self.identity, step="propose-redactions",
             selected=f"{len(proposals)} proposals",
             selection_basis=(
-                "proposals only; each requires individual human approval before "
-                "anything is applied, and approved items are written to a new "
-                "artefact rather than over the original (ADR-013)"
+                "proposals only; each requires individual human approval, and "
+                "nothing in this system applies one: the tool never masks, "
+                "removes or rewrites a value in any file (ADR-013)"
             ),
             undetermined=["whether these suffice: only a human can judge that "
                           "the residual risk is acceptable"],

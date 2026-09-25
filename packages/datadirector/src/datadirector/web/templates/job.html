@@ -8,6 +8,12 @@
 
 <h1>{{ job.phase_label }}</h1>
 
+{% if notice %}
+   <div role="status" class="notice">
+     <p>{{ notice }}</p>
+   </div>
+{% endif %}
+
 {% if job.halted_reason %}
   <div role="alert" class="notice problem">
     <p><strong>This job stopped.</strong> {{ job.halted_reason }}</p>

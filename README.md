@@ -196,7 +196,7 @@ backend, so a reviewer without a model or credentials can replay them.
 python -m venv .venv && source .venv/bin/activate
 pip install -e packages/datadirector-contracts
 pip install -e "packages/datadirector[dev]"     # includes pillow and pyflakes
-cp .env.example .env        # then fill in; .env is git-ignored
+cp .env.example .env        # then fill in; the CLI reads .env when a command starts. It is git-ignored
 pytest -q
 ```
 
@@ -217,6 +217,56 @@ No credential value appears in any configuration file, event payload or
 provenance record. The application reads secrets only from the environment, and
 plugins request them by scope from a credential broker rather than receiving
 them as values. `.env` is git-ignored from the first commit.
+
+`datadirector` reads `.env` from the working directory into the environment
+before any command runs; `--env-file` points it elsewhere. Three rules keep that
+from becoming a second credential surface. A variable the shell already exported
+wins over the file, so a one-off override keeps working. A line with no value
+leaves the variable unset rather than empty, so an unfilled template is not
+mistaken for a credential that happens to be blank. And nothing prints a value:
+`check` reports the names the file supplied and the line numbers it could not
+parse, never their contents.
+
+Because the file only *populates* the environment, a token added to `.env` after
+a process started is invisible to that process — restart it. And because
+`.env.example` is committed, it carries no real value: `datadirector check` will
+say so. A credential that reaches a commit has to be revoked rather than
+deleted, since history keeps what you delete.
+
+
+## Prose, laid out as its author shaped it
+
+Three fields are the researcher's own words rather than the system's: the
+responsibility statement, the instruction given at submission, and the reason
+typed beside a gate decision. The history page quotes them in a `figure.said`
+instead of describing them — a sentence saying that a statement was kept does not
+help a person who has come back to remember what they said — and renders them
+through `web/markdown.py`, so the paragraphing, lists and DOI links they typed
+arrive as typography instead of one flat line.
+
+That renderer is hand-written rather than a dependency, and the reason is the
+order of operations: it escapes on the way in and interprets afterwards, so no
+input reaches the output as markup. A library that renders first and sanitises
+after depends on the sanitiser having anticipated every construction that reaches
+it. The subset is paragraphs, line breaks kept as the author made them, headings
+demoted below the page's own, emphasis, code, lists, blockquotes and links. It
+cannot produce a tag, a `javascript:` href (checked after unescaping, because a
+browser decodes entities in an attribute before acting on it), or an `<img>`: a
+remote image is fetched by whoever opens the page, which would let a statement
+written in one year report the presence of the auditor reading it in another.
+Apply `| md` to prose written to be read — a person's words and the record's
+description and methods — and not to our own narration or to values. The
+documentation agent drafts the overview and the collection methods in sections,
+and the repository renders that field as markdown once published; on the publish
+screen they are laid out with the same renderer, because a person asked to
+approve a record whose structure reaches them as `##` and `-` is approving
+something they will never see in the form they signed off. That is safe for the
+same reason as the statement is: the escape happens first, so a model that
+faithfully repeats markup it was handed — from a file name, or from a README it
+was reading — produces text rather than permission. Sentences the system wrote
+about an event, and short values such as the title, the licence and the
+keywords, stay plain escaped: they are one line each, and typography would give
+them a weight the record does not claim for them.
 
 
 ## Picking this up

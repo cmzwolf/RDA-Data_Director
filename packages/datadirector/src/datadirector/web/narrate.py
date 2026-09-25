@@ -23,7 +23,12 @@ from __future__ import annotations
 from datadirector_contracts import Event, EventKind
 from pydantic import BaseModel, ConfigDict, Field
 
+from ..gate.items import PROPOSAL_WORDS
+
 LEVELS = {0: "public", 1: "internal", 2: "sensitive"}
+# Sentences that already name the reader, so the page prints the
+# identifier without a "by" that contradicts them.
+SECOND_PERSON = ("You ", "Your ", "We took ")
 
 # What each event means, in the second person where a person did it.
 SENTENCES: dict[EventKind, str] = {
@@ -39,7 +44,7 @@ SENTENCES: dict[EventKind, str] = {
     EventKind.DOCUMENTATION_DRAFTED: "We drafted the documentation",
     EventKind.VALIDATION_COMPLETED: "We checked the metadata",
     EventKind.METADATA_APPROVED: "You approved the metadata",
-    EventKind.REDACTION_PROPOSED: "Something was put to you for review",
+    EventKind.REDACTION_PROPOSED: "Proposals were put to you for review",
     EventKind.REDACTION_DECIDED: "You decided an item",
     EventKind.REPOSITORY_SELECTED: "You chose where to publish",
     EventKind.DEPOSIT_COMPLETED: "Published",
@@ -62,6 +67,37 @@ INTERNAL_KEYS = {
     "reason_recorded", "created_by", "channel", "sequence",
 }
 
+# The treatment words live with the gate items (PROPOSAL_WORDS) so that the
+# gate screen and this history page cannot drift into wording the other has
+# not been reviewed for: a bare verb like "pseudonymise" never reaches a page.
+NOTHING_APPLIED = ("Nothing has been masked or removed: these are proposals "
+                    "only. This tool edits no file; a redaction, if one is "
+                    "wanted, is carried out by a person outside it.")
+
+
+def _proposal_line(item: dict) -> str | None:
+    """One gate item as a line about what *would* change, never what did.
+
+    The stored summary carries the agent's own treatment verb; where a
+    proposal is present its fields are re-read and re-worded instead, so
+    a proposal logged under the older summary is still shown for what it
+    is.
+    """
+    proposal = item.get("proposal")
+    if not isinstance(proposal, dict):
+        summary = item.get("summary")
+        return summary if isinstance(summary, str) else None
+    treatment = str(proposal.get("treatment", "")).lower()
+    words = PROPOSAL_WORDS.get(
+        treatment, f"a treatment was proposed for the values of "
+                     f"``{treatment or 'an unnamed location'}``")
+    artefact = item.get("artefact") or proposal.get("artefact") or ""
+    location = proposal.get("location") or "an unstated location"
+    reason = proposal.get("reason_code") or "reason unstated"
+    prefix = f"{artefact} · " if artefact else ""
+    return f"Proposed: {prefix}{location} — {words} (reason: {reason})"
+
+
 
 class Told(BaseModel):
     """One event, as a sentence and a few facts."""
@@ -71,6 +107,14 @@ class Told(BaseModel):
     what: str
     who: str | None = None
     detail: list[str] = Field(default_factory=list)
+    # The person's own words, verbatim. `detail` is our sentence about the
+    # event; this is what they typed, and the page quotes it rather than
+    # confirming that something was typed.
+    said: str | None = None
+    # Set when the sentence already speaks to the reader as "you", so the
+    # identifier after it is printed in parentheses rather than after a "by"
+    # that makes it read as though the telling were done by someone else.
+    second_person: bool = False
     concerning: str | None = Field(
         default=None,
         description="Set where the event is a problem, so the page can mark it "
@@ -84,6 +128,7 @@ def describe(event: Event) -> Told:
     payload = event.payload or {}
     detail: list[str] = []
     concerning = None
+    said = None
 
     if event.kind is EventKind.MATERIAL_REGISTERED:
         count = len(payload.get("artefacts") or [])
@@ -134,9 +179,13 @@ def describe(event: Event) -> Told:
                               "plan rather than facts about it")
 
     elif event.kind is EventKind.INSTRUCTIONS_RECEIVED:
+        # Quoted, not announced. What was here stated only that a statement
+        # exists. A person returning to this page weeks later is not checking
+        # whether one exists, they are trying to remember what they said, and
+        # only the words themselves help.
         if payload.get("statement"):
-            detail.append("your statement about the data, kept exactly as you "
-                          "wrote it")
+            what = "You told us what the data is about"
+            said = payload["statement"]
         elif payload.get("backend_names") is not None:
             names = payload.get("backend_names") or []
             ceiling = payload.get("residency_at_most")
@@ -145,7 +194,11 @@ def describe(event: Event) -> Told:
             if names:
                 detail.append(f"prefer {', '.join(names)}")
         elif payload.get("instruction"):
-            detail.append(payload["instruction"][:300])
+            # Whole, not excerpted: a cut at three hundred characters is the same
+            # evocation as a summary, with the added insult that it falls wherever
+            # the count falls rather than where the sense does.
+            what = "You told us what to do with it"
+            said = payload["instruction"]
 
     elif event.kind is EventKind.VALIDATION_COMPLETED:
         findings = payload.get("findings") or []
@@ -174,13 +227,40 @@ def describe(event: Event) -> Told:
     elif event.kind is EventKind.OWNER_ADDED:
         detail.append(payload.get("owner", ""))
         if payload.get("reason"):
-            detail.append(payload["reason"])
+             # Their words, not ours, and written in a box three rows high:
+              # quoted through the same path as a statement rather than flattened
+              # into one line of the detail list.
+            said = payload["reason"]
+
+    elif event.kind is EventKind.REDACTION_PROPOSED:
+        # An item put in front of a person should read as one. The
+        # payload carries the item whole; the history page needs its
+        # summary line, which the gate screen will show in full beside
+        # the decision. The stored summary words the treatment as a
+        # bare verb - "suppress", "pseudonymise" - and on a page of
+        # things that happened that reads as an applied change. Nothing
+        # is applied anywhere in this system, so the line is rebuilt
+        # from the proposal itself, in the conditional, and the page
+        # says so once beneath the list.
+        proposed = False
+        items = payload.get("items")
+        if isinstance(items, list):
+            for item in items:
+                if isinstance(item, dict):
+                    line = _proposal_line(item)
+                    if line:
+                        detail.append(line)
+                        proposed = True
+        if proposed:
+            detail.append(NOTHING_APPLIED)
+        if payload.get("summary"):
+            detail.append(payload["summary"])
 
     elif event.kind is EventKind.REDACTION_DECIDED:
         detail.append(f"{payload.get('item_id', '')}: "
                       f"{payload.get('decision', '')}")
         if payload.get("reason"):
-            detail.append(payload["reason"])
+            said = payload["reason"]
 
     else:
         # Anything without a hand-written reading shows its simple values only.
@@ -194,4 +274,5 @@ def describe(event: Event) -> Told:
             detail.append(f"{key.replace('_', ' ')}: {value}")
 
     return Told(what=what, who=who, detail=[d for d in detail if d],
-                concerning=concerning)
+                concerning=concerning, said=said,
+                second_person=what.startswith(SECOND_PERSON))

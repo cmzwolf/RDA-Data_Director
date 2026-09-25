@@ -71,6 +71,10 @@ class CredentialBroker:
         if not value:
             raise CredentialError(
                 f"environment variable {var} is not set, which scope {scope!r} "
-                "requires. Copy .env.example to .env and fill it in."
+                "requires it. Put it in .env (a copy of .env.example, which is "
+                     "git-ignored): the command reads that file into the "
+                     "environment when it starts, so a value added to the file "
+                     "afterwards is invisible to a process already running — "
+                     "restart it."
             )
         return Secret(value, scope)

@@ -56,6 +56,17 @@ PHASES: list[tuple[str, str, tuple[EventKind, ...]]] = [
 # are different situations and a researcher needs to know which they are in.
 HUMAN_PHASES = {"declaration", "review", "deposit"}
 
+# Events that belong in a phase's history without evidencing its completion.
+# REDACTION_PROPOSED belongs to the review history: someone who opens "your
+# review" is asking what was put to them, and needs to see the items that were
+# raised there, not only the decisions they made later. The same event cannot
+# count toward completion — review turns waiting-on-you, not done, at the
+# moment items appear — so the two lists are kept apart rather than one doing
+# both jobs.
+PHASE_DISPLAY_KINDS: dict[str, tuple[EventKind, ...]] = {
+    "review": (EventKind.REDACTION_PROPOSED,),
+}
+
 
 class Phase(BaseModel):
     model_config = ConfigDict(frozen=True)
@@ -145,8 +156,20 @@ def _reached(state) -> str:
     if state.terminal:
         return "deposit"
     mapping = {"ingestion": "declaration", "declaration": "declaration",
-               "classification": "classification", "metadata": "metadata",
-               "deposit": "deposit"}
+                 "classification": "classification", "metadata": "metadata",
+                 "deposit": "deposit",
+                 # The three steps that mean a person owes a decision: the
+                 # items put to them, a DMP discrepancy, and the record
+                 # awaiting approval. Each is the review phase's business,
+                 # and a step that fell through to the declaration default
+                 # left the review phase looking pending while items sat
+                 # unresolved, with no route from its history to the gate.
+                 # Other step names ("dmp", "repository-selection") are
+                 # legacy names whose phase cannot be read off the name
+                 # alone, so they keep the fallback rather than guess.
+                 "awaiting-redaction-decision": "review",
+                 "awaiting-discrepancy-review": "review",
+                 "awaiting-approval": "review"}
     return mapping.get(state.step, "declaration")
 
 
@@ -184,7 +207,7 @@ def events_in_phase(events: list[Event], key: str) -> list[Event]:
     forty entries does not answer it.
     """
     kinds = next((k for phase, _, k in PHASES if phase == key), ())
-    related = set(kinds)
+    related = set(kinds) | set(PHASE_DISPLAY_KINDS.get(key, ()))
     out = []
     for event in events:
         if event.kind in related:

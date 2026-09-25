@@ -205,7 +205,10 @@ class DepositRequest(BaseModel):
 class DepositResponse(BaseModel):
     model_config = ConfigDict(frozen=True)
 
-    pid: str
+    pid: str | None = Field(
+        default=None,
+        description="The version PID. Absent only where nothing was published, "
+          "which happens when every artefact was excluded at the gate.")
     concept_pid: str | None = None
     landing_page: str | None = None
     already_published: bool = Field(
@@ -213,6 +216,12 @@ class DepositResponse(BaseModel):
         description="True where this job had already been published and the "
         "existing identifiers were returned. Repeating a deposit is not an "
         "error: a client that lost the response must be able to ask again.")
+    nothing_to_deposit: bool = Field(
+        default=False,
+        description="True where the researcher withheld every artefact at the "
+          "gate, so the job closed without publishing anything. A decision "
+          "honoured rather than a failure — hence a 200 with no PID, not a 500.")
+
 
 
 class ProblemDetail(BaseModel):

@@ -25,6 +25,21 @@
          aria-labelledby="h-{{ loop.index }}">
   <h2 id="h-{{ loop.index }}">{{ item.summary }}</h2>
 
+{% if item.kind == 'redaction-proposal' %}
+  {# The treatment names - "suppress", "pseudonymise" - are verbs, and a
+     verb on a screen reads as something done. Nothing is done to any file
+     by this system: the item is a question, and deciding it records an
+     answer, not a change. The page has to say that, or an approval is
+     mistaken for a redaction that never happened. #}
+  <p class="presumption" role="note">
+    <strong>A proposal, not a change.</strong> Nothing has been masked,
+    removed or rewritten. This tool does not alter the contents of any
+    file: deciding here records your answer to the proposal, and carrying
+    out a redaction, if one is wanted, is done outside it.
+  </p>
+{% endif %}
+
+
   <dl>
     <dt>Kind</dt><dd>{{ item.kind }}</dd>
     {% if item.artefact %}<dt>File</dt><dd>{{ item.artefact }}</dd>{% endif %}
@@ -47,13 +62,13 @@
   {% endif %}
 
   {% if item.diff %}
-    <h3 id="diff-{{ loop.index }}">What would change</h3>
+    <h3 id="diff-{{ loop.index }}">What the proposal describes</h3>
     <table class="diff">
-      <caption class="visually-hidden">Proposed change to
-        {{ item.artefact or 'this record' }}</caption>
+      <caption class="visually-hidden">What the proposal describes for
+         {{ item.artefact or 'this record' }} — nothing here is or will be applied by this tool</caption>
       <thead>
-        <tr><th scope="col">Where</th><th scope="col">Now</th>
-            <th scope="col">Would become</th></tr>
+        <tr><th scope="col">Where</th><th scope="col">Now, untouched</th>
+            <th scope="col">If edited by a person outside this tool</th></tr>
       </thead>
       <tbody>
         {% for change in item.diff %}

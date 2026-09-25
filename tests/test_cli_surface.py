@@ -176,6 +176,48 @@ def test_an_explicit_path_is_never_second_guessed(tmp_path, monkeypatch,
     assert capsys.readouterr().err == ""
 
 
+def test_the_environment_file_is_read_on_the_way_in():
+    """`.env` was read by nothing. Filling it in produced "environment variable
+    DD_ZENODO_TOKEN is not set" while the file sat in the working directory,
+    with the message advising the developer to fill it in. The load belongs in
+    `main`, before dispatch, so every command sees the same environment rather
+    than one command having the credential and its neighbours not."""
+    import re
+    from pathlib import Path
+
+    source = Path(cli.__file__).read_text(encoding="utf-8")
+    body = source[source.index("def main("):]
+    assert re.search(r"load_env_file\(\s*args\.env_file\s*\)", body), (
+         "main() does not read the environment file into the environment, so a "
+         "filled-in .env changes nothing")
+    assert body.index("load_env_file(") < body.index("handlers = {"), (
+         "the environment file is read after dispatch: the command that needs "
+         "the credential has already run without it")
+
+
+def test_the_committed_environment_template_carries_no_credential():
+    """.env.example is tracked, and it carried a live-looking Zenodo token:
+    filled in where it would be committed rather than in the ignored copy. A
+    committed credential has to be revoked rather than deleted, because history
+    keeps it, so the template must never be able to hold one."""
+    from pathlib import Path
+
+    template = Path(cli.__file__).parents[4] / ".env.example"
+    if not template.exists():
+        pytest.skip("no .env.example in this tree")
+    secret_lines = [line for line in template.read_text().splitlines()
+                     if "=" in line and not line.strip().startswith("#")
+                     and line.split("=", 1)[1].strip()
+                     and not line.startswith("DD_ZENODO_BASE")
+                     and not line.startswith("DD_OLLAMA_ENDPOINT")
+                     and not line.startswith("DD_ORCID_BASE")]
+    assert secret_lines == [], (
+         f"{template.name} carries a value where a credential would go: "
+         f"{[l.split('=', 1)[0] for l in secret_lines]}. Endpoints and bases may "
+         "be committed; a token may not, because revoking it is the only way to "
+         "un-commit it.")
+
+
 def test_real_configuration_is_not_version_controlled():
     """A deployment's configuration is a property of its machine, and committing
     one person's endpoints and paths would make every pull a conflict."""

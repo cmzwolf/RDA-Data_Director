@@ -54,6 +54,24 @@ form.inline { display: inline; }
 .history .payload { margin: .2rem 0 .6rem 1rem; font-size: .9em; }
 .history dt { font-weight: 600; }
 
+/* Prose written to be read, by a person or by the drafting agent: a
+   researcher's statement, and the overview and methods the documentation agent
+   drafts from it. Not styled as a generic blockquote: inside these, markdown may
+   produce headings, lists and code, and a list of sites should not inherit the
+   indentation of a literary quotation with every margin collapsed. */
+.said, .drafted { margin: .4rem 0 .6rem; padding: .5rem .9rem; font-size: .95em;
+        border-left: 4px solid #ccc; background: #fafaf8; }
+.said p, .drafted p { margin: .35rem 0; }
+.said ul, .drafted ul, .said ol, .drafted ol { margin: .35rem 0; padding-left: 1.4rem; }
+.said pre, .drafted pre { margin: .4rem 0; padding: .5rem; overflow-x: auto;
+            background: #f4f4f2; }
+.said code, .drafted code { background: #eee; padding: .05rem .25rem; }
+.said figcaption { color: var(--muted); font-size: .85rem; }
+.said blockquote, .drafted blockquote { margin: .35rem 0; padding-left: .8rem;
+                   border-left: 3px solid #ddd; color: #444; }
+.said h4, .drafted h4, .said h5, .drafted h5, .said h6, .drafted h6 {
+        margin: .5rem 0 .2rem; font-size: 1em; }
+
 /* The landing page. A visitor who has never been here is reading, not working. */
 .lede { font-size: 1.15em; max-width: 42em; }
 a.button {

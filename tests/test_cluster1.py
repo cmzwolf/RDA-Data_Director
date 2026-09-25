@@ -183,6 +183,93 @@ def test_traceback_from_a_credentialed_call_carries_no_secret():
         assert "tok_secret_value" not in str(exc)
 
 
+def test_the_environment_file_populates_what_the_shell_left_unset(tmp_path):
+    """`.env` was where a token went, and nothing read it. The broker reported
+    DD_ZENODO_TOKEN missing while the filled-in file sat in the working
+    directory, and its message told the developer to fill in that same file."""
+    from datadirector.credentials.envfile import load_env_file
+
+    env = tmp_path / ".env"
+    env.write_text("# a comment\nDD_ZENODO_TOKEN=tok_from_the_file\n"
+                   "export DD_ZENODO_BASE='https://sandbox.zenodo.org'\n")
+    environ = {}
+    read = load_env_file(env, environ=environ)
+    assert environ["DD_ZENODO_TOKEN"] == "tok_from_the_file"
+    assert environ["DD_ZENODO_BASE"] == "https://sandbox.zenodo.org"
+    assert read.loaded == ("DD_ZENODO_TOKEN", "DD_ZENODO_BASE")
+    # The credential reaches the broker the way any other environment value
+    # does: nothing hands it over as a value.
+    broker = CredentialBroker({"zenodo:deposit": "DD_ZENODO_TOKEN"},
+                              environ=environ)
+    assert broker.get("zenodo:deposit").reveal() == "tok_from_the_file"
+
+
+def test_a_variable_the_shell_exported_beats_the_file(tmp_path):
+    """A file provided for convenience must not overrule an explicit export,
+    or a temporary override would be silently discarded."""
+    from datadirector.credentials.envfile import load_env_file
+
+    env = tmp_path / ".env"
+    env.write_text("DD_ZENODO_TOKEN=tok_from_the_file\n")
+    environ = {"DD_ZENODO_TOKEN": "tok_from_the_shell"}
+    read = load_env_file(env, environ=environ)
+    assert environ["DD_ZENODO_TOKEN"] == "tok_from_the_shell"
+    assert read.already_set == ("DD_ZENODO_TOKEN",)
+    assert read.loaded == ()
+
+
+def test_an_unfilled_template_line_leaves_the_variable_unset(tmp_path):
+    """`TOKEN=` in a template means nobody filled it in, and callers do
+    distinguish an absent variable from a blank one. Setting it to "" would
+    present an unfilled template as a credential that happens to be empty."""
+    from datadirector.credentials.envfile import load_env_file
+
+    env = tmp_path / ".env"
+    env.write_text("DD_ORCID_CLIENT_SECRET=\nDD_ZENODO_TOKEN=tok\n")
+    environ = {}
+    read = load_env_file(env, environ=environ)
+    assert "DD_ORCID_CLIENT_SECRET" not in environ
+    assert read.unfilled == ("DD_ORCID_CLIENT_SECRET",)
+
+
+def test_the_file_is_never_repeated_back(tmp_path):
+    """The realistic leak is a diagnostic that quotes the line it could not
+    parse. A value appears nowhere in what a read returns or prints."""
+    from datadirector.credentials.envfile import load_env_file
+
+    secret = "tok_do_not_echo_9e1f"
+    env = tmp_path / ".env"
+    env.write_text(f"DD_ZENODO_TOKEN={secret}\nnot a setting {secret}\n")
+    read = load_env_file(env, environ={})
+    assert read.malformed == (2,)
+    assert read.loaded == ("DD_ZENODO_TOKEN",)
+    for said in (repr(read), read.summary(), " ".join(read.problems())):
+        assert secret not in said
+
+
+def test_a_line_that_is_not_a_setting_is_said_not_swallowed(tmp_path):
+    """A token pasted onto the wrong line would otherwise be silently absent,
+    and an absent credential is what the whole incident was."""
+    from datadirector.credentials.envfile import load_env_file
+
+    env = tmp_path / ".env"
+    env.write_text("DD_ZENODO_TOKEN=tok\nDD_ZENODO_BASE https://x\n")
+    read = load_env_file(env, environ={})
+    assert read.malformed == (2,)
+    assert len(read.problems()) == 1
+    assert "line 2" in read.problems()[0]
+
+
+def test_no_environment_file_is_not_reported_as_a_defect(tmp_path):
+    """A deployment that injects credentials from outside has no `.env`. The
+    absence of the file is not a fault, and says nothing."""
+    from datadirector.credentials.envfile import load_env_file
+
+    read = load_env_file(tmp_path / ".env", environ={})
+    assert read.present is False
+    assert read.problems() == []
+
+
 def test_missing_credential_names_the_variable_not_the_value():
     b = CredentialBroker({"zenodo:deposit": "DD_ZENODO_TOKEN"}, environ={})
     with pytest.raises(CredentialError, match="DD_ZENODO_TOKEN"):

@@ -18,14 +18,15 @@ from __future__ import annotations
 
 import pytest
 from datadirector_contracts import (
-    Event, EventKind, GateItemKind, ItemDecision, ModelCapability, Orcid,
-    SensitivityClass,
+    Event, EventKind, GateItem, GateItemKind, ItemDecision, ModelCapability,
+    Orcid, SensitivityClass,
 )
 from datadirector_contracts.gate import counts_as_validation
 
 from datadirector.agents.base import Capabilities, Invocation, LlmOutput, Outcome
 from datadirector.errors import AuthorityError, ConfigurationError
 from datadirector.gate import review as review_items
+from datadirector.job_handle import target_repository
 from datadirector.pipeline import Pipeline
 from datadirector.state.projection import fold
 
@@ -91,6 +92,56 @@ def test_asking_for_another_attempt_is_not_a_validation():
     assert counts_as_validation(ItemDecision.APPROVE)
     assert counts_as_validation(ItemDecision.EDITED)
     assert not counts_as_validation(ItemDecision.REQUEST_RERUN)
+
+def test_an_output_nobody_may_rewrite_is_not_offered_the_edit_button():
+    """The button and the prose used to contradict each other.
+
+    `editable=False` only added an explanatory line: the item still offered
+    `edited`, and said in the same breath that a person may not write their own
+    level. That is not cosmetic. `counts_as_validation` is true of `EDITED`, so
+    the reviewer who pressed it on a classification item attested to a version
+    they never wrote and released validation, documentation and the deposit
+    behind it. A control whose effect cannot be honoured is the one kind of
+    control a gate may not offer.
+    """
+    item = review_items.review_item(
+        "classification/0.1.0", "the sensitivity view and the reasons for it",
+        [{"level": "sensitive"}], editable=False,
+        edit_note="a person may not write their own level here")
+    assert ItemDecision.EDITED not in item.permitted_decisions
+    assert ItemDecision.APPROVE in item.permitted_decisions
+    assert ItemDecision.REQUEST_RERUN in item.permitted_decisions
+    # And the evidence stops pointing at an edit that cannot be made.
+    assert not any("edit it" in line for line in item.detail)
+    assert item.detail[-1].startswith("a person may not write their own level")
+
+
+def test_an_editable_draft_still_offers_all_three_answers():
+    # The other half of the rule: dropping the button follows from the agent
+    # declaring its output uneditable, and is not a new house style.
+    assert _item().permitted_decisions == list(review_items.REVIEW_DECISIONS)
+
+
+def test_reading_a_model_draft_cannot_stand_in_for_validating_it():
+    """Having read something is not a judgement about it.
+
+    The screen only renders what `permitted_decisions` holds, so this is not
+    reachable by clicking. It is reachable from an item whose declaration
+    drifted, or a form built by hand -- and a draft settled by "I have read
+    this" would release validation, documentation and the deposit behind it
+    on nobody having judged the draft at all.
+    """
+    item = GateItem(item_id="llm-output:metadata:0123456789ab",
+                    kind=GateItemKind.LLM_OUTPUT,
+                    summary="Check what metadata wrote: the record",
+                    detail=["written by metadata/0.1.0"],
+                    permitted_decisions=[ItemDecision.APPROVE,
+                                         ItemDecision.ACKNOWLEDGE])
+    gate = review_items.Gate()
+    gate.add([item])
+    with pytest.raises(AuthorityError, match="holds what a model wrote"):
+        gate.resolve(item.item_id, ItemDecision.ACKNOWLEDGE, human=REVIEWER)
+    assert [i.item_id for i in gate.unresolved()] == [item.item_id]
 
 
 def test_a_requested_rerun_leaves_the_draft_waiting(runtime):
@@ -249,4 +300,155 @@ def test_an_output_already_reviewed_item_by_item_declares_nothing():
 
     for agent in (RedactionAgent, DeclarationAgent):
         assert agent.capabilities().llm_output is None
+
+
+# -- two defects the real logs recorded ------------------------------------
+#
+# Both reached a live job and were read back off its event log, so they are
+# reproduced here from the same fold the running system uses rather than from a
+# fresh model of it.
+
+
+def _draft(pipeline, agent, title):
+    """Put one model draft on the log as a review item, and return the item."""
+    item = review_items.review_item("{}/0.1.0".format(agent), "the record",
+                                    [{"title": title}])
+    pipeline.record_gate_items(JOB, [item], agent="{}/0.1.0".format(agent))
+    return item
+
+
+def test_an_item_written_twice_still_asks_once(runtime):
+    # The log is append-only and one item had two writers: the orchestrator
+    # raised it and a route appended a second copy under its own agent. The
+    # researcher saw the same question twice, and a gate that repeats itself is
+    # a gate that gets clicked through. The fold collapses them, so the item --
+    # and the single decision it asks for -- appears once.
+    pipeline = Pipeline(runtime)
+    item = _draft(pipeline, "metadata", "Sediment cores from the Tris basin")
+    raw = item.model_dump(mode="json")
+    pipeline.runtime.store.append(Event(
+        sequence=1, job_id=JOB, kind=EventKind.REDACTION_PROPOSED,
+        agent="web/0.1.0",
+        payload={"marker": "gate.items-added", "items": [raw]}))
+
+    folded = review_items.log_items(pipeline.runtime.store.load(JOB))
+    assert [i.item_id for i in folded].count(item.item_id) == 1, (
+        "an item written by two agents was folded as two items")
+    assert [i.item_id for i in pipeline.pending_reviews(JOB)] == [item.item_id]
+
+
+def test_a_later_validated_draft_releases_the_one_it_replaced(runtime):
+    # The defect a live job was stuck on. A reviewer asked the agent to write
+    # again; that left the first draft open, correctly, while the second was
+    # produced. They then edited a *third* draft and validated it, and nothing
+    # retired the never-validated first one. It held the workflow and the
+    # deposit forever, for prose nobody would ever publish -- the latest draft
+    # is the only one the deposit reads. Asking again still holds the draft
+    # being replaced; it is the replacement, once validated, that frees it.
+    pipeline = Pipeline(runtime)
+    first = _draft(pipeline, "classification", "first abstract")
+    pipeline.resolve_review(JOB, first.item_id, ItemDecision.REQUEST_RERUN,
+                            human=REVIEWER, reason="the year is invented")
+    _draft(pipeline, "classification", "second abstract")
+    third = _draft(pipeline, "classification", "third abstract")
+    pipeline.resolve_review(JOB, third.item_id, ItemDecision.EDITED,
+                            human=REVIEWER)
+
+    assert pipeline.pending_reviews(JOB) == [], (
+        "a validated later draft must retire the draft it superseded")
+
+
+def test_an_unvalidated_latest_draft_still_holds_its_predecessors(runtime):
+    # The boundary of the rule above, so the fix cannot be read as "several
+    # drafts, keep the newest": supersession only reaches back from a draft
+    # somebody has actually stood behind. Until the newest draft is validated,
+    # every earlier unvalidated one is still owed a reading, and the workflow
+    # stays stopped exactly as the rerun rule requires.
+    pipeline = Pipeline(runtime)
+    first = _draft(pipeline, "classification", "first abstract")
+    pipeline.resolve_review(JOB, first.item_id, ItemDecision.REQUEST_RERUN,
+                            human=REVIEWER, reason="the year is invented")
+    second = _draft(pipeline, "classification", "second abstract")
+    third = _draft(pipeline, "classification", "third abstract")
+
+    # Nothing validated yet: the first held by its rerun request, the second
+    # and third by never having been read at all.
+    assert [i.item_id for i in pipeline.pending_reviews(JOB)] == [
+        first.item_id, second.item_id, third.item_id]
+
+    pipeline.resolve_review(JOB, second.item_id, ItemDecision.APPROVE,
+                            human=REVIEWER)
+    # The second validates, but the third -- later still -- is unvalidated, so
+    # the second is the newest validated draft and only what precedes it is
+    # released. The third still holds; the first, before the second, goes.
+    assert [i.item_id for i in pipeline.pending_reviews(JOB)] == [third.item_id]
+
+
+
+# ==========================================================================
+# Where the job is going, read off the log
+#
+# The metadata agent populates the publisher from a registry of the second
+# kind, and it can only do that for a repository the log already names. The
+# item id is spelled out here rather than imported from repository_choice on
+# purpose: a prefix that drifts in one of the two places should fail a test,
+# not quietly read as "nobody named a repository".
+# ==========================================================================
+
+CREATED = Event(sequence=1, job_id=JOB, kind=EventKind.WORKFLOW_CREATED,
+                 agent="pipeline/0.1.0", payload={})
+
+
+def _added(item):
+    """The entry the orchestrator appends when an agent raises an item."""
+    return Event(sequence=1, job_id=JOB, kind=EventKind.REDACTION_PROPOSED,
+                 agent="pipeline/0.1.0",
+                 payload={"marker": "gate.items-added",
+                             "items": [item.model_dump(mode="json")]})
+
+
+def _preference_item(name="Zenodo"):
+    return GateItem(item_id="repository-preference:" + name,
+                    kind=GateItemKind.DMP_DISCREPANCY,
+                    summary="Deposit to " + name + "?", detail=[],
+                    permitted_decisions=[ItemDecision.APPROVE])
+
+
+def test_the_repository_named_on_the_log_is_the_one_read_off_it():
+    """The preference the gate asked the depositor to confirm is where the
+    job is headed for the metadata agent, because that is the only thing the
+    log says so far. The repository node has not run yet."""
+    assert target_repository([CREATED, _added(_preference_item())]) == {
+        "name": "Zenodo", "identifier": None, "source": "preference"}
+
+
+def test_a_confirmed_selection_outranks_the_preference_it_came_from():
+    """Both names are on the log. The selection is the one a person made at
+    the repository node, so it is the destination; reading the preference
+    instead would populate the publisher from a repository the depositor
+    walked away from."""
+    events = [_added(_preference_item("Zenodo")),
+              Event(sequence=1, job_id=JOB, kind=EventKind.REPOSITORY_SELECTED,
+                    agent="repository/0.1.0", human=REVIEWER,
+                    payload={"repository": "Dryad",
+                             "identifier": "10.5063/FICZ6A"})]
+    assert target_repository(events) == {"name": "Dryad",
+                                         "identifier": "10.5063/FICZ6A",
+                                         "source": "selected"}
+
+
+def test_nothing_named_is_reported_as_nothing_named():
+    """Not "no repository exists", not "the registry has none": the log says
+    nothing, which is a different finding and calls for a different next act."""
+    assert target_repository([CREATED]) is None
+
+
+def test_another_kind_of_item_is_not_read_as_a_repository():
+    """The fold looks for one item id and no other. An LLM-output item is a
+    draft a person has to read, not a destination, and reading one as a
+    destination would name a model's output as where the data is going."""
+    item = GateItem(item_id="llm-output:classification:d61e2871445a",
+                    kind=GateItemKind.LLM_OUTPUT, summary="the abstract",
+                    detail=[], permitted_decisions=[ItemDecision.APPROVE])
+    assert target_repository([_added(item)]) is None
 

@@ -138,6 +138,16 @@ class AgentContext:
     vocabulary: Any = None
     # The repository registry the repository agent shortlists from.
     re3data: Any = None
+    # The registry of the SECOND kind: standards, and what a repository
+    # requires a deposit to look like. One field per kind, because conflating
+    # them is how a destination starts standing in for a standard. `re3data`
+    # answers "where should this be deposited", and the answer is Zenodo.
+    # This answers "what must that repository's record contain", and the
+    # answers are FAIRsharing and re3data, neither of which is anywhere to
+    # deposit to. re3data serves both roles today, so a deployment may hand
+    # the same driver to both; a deployment with FAIRsharing credentials
+    # points this field there and leaves the shortlist on re3data.
+    standards_registry: Any = None
     # The driver the publication agent deposits through, when configured.
     repository_driver: Any = None
     # The name of that driver, for the record.

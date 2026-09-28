@@ -192,6 +192,81 @@ def test_a_care_referral_offers_no_approval(web, service, researcher):
     body = client.get(f"/ui/jobs/{job_id}/gate").text
     assert 'value="approve"' not in body
     assert 'value="consulted"' in body
+def _report(name="Zenodo"):
+    # An item that reports something: what was understood from an instruction.
+    # Nothing downstream reads an approval or a refusal of it, so it asks only
+    # to be read.
+    return GateItem(
+        item_id=f"repository-preference:{name}",
+        kind=GateItemKind.DMP_DISCREPANCY,
+        summary=(f"Read from what you wrote: publish to {name}. Nothing has "
+                  "been chosen yet."),
+        detail=[f"you wrote: publish it on {name}",
+                 "Nothing here chooses where the deposit goes, and nothing is "
+                 "booked by reading it."],
+        permitted_decisions=[ItemDecision.ACKNOWLEDGE])
+
+
+def test_a_report_offers_one_button_not_a_choice(web, service, researcher):
+    """A radio group is for choosing between outcomes.
+
+    Where there is one honest answer, drawing radio buttons tells the reader
+    their click decides something. The repository-preference item used to be
+    headed "Deposit to Zenodo?" with approve and refuse beneath it, and no code
+    path reads either answer -- the destination is settled later, when the
+    candidates are put to the depositor. Someone who "approved" it believed
+    they had booked a deposit.
+    """
+    client, sign_in = web
+    job_id = _job(service, researcher)
+    service.add_gate_items(job_id, [_report()])
+    sign_in(researcher)
+    body = client.get(f"/ui/jobs/{job_id}/gate").text
+    assert 'type="radio"' not in body
+    assert 'value="acknowledge"' in body
+    assert "I have read this" in body
+      # The legend a choice would have had, and the reason box that asks
+      # someone to justify a reading they agree with.
+    assert "Your decision" not in body
+    assert "What a reader in two years needs" not in body
+
+
+def test_reading_a_report_settles_it(web, service, researcher):
+    """Reading is not a verdict, but it is what the item asked for, so the job
+    is not held open on a notice nobody can do anything about."""
+    client, sign_in = web
+    job_id = _job(service, researcher)
+    service.add_gate_items(job_id, [_report()])
+    sign_in(researcher)
+    response = client.post(
+        f"/ui/jobs/{job_id}/gate/repository-preference:Zenodo",
+        data={"decision": "acknowledge"})
+    assert response.status_code == 303
+    assert service.gate(job_id).unresolved() == []
+
+
+def test_the_gate_speaks_to_a_person_not_to_the_schema(web, service,
+                                                     researcher):
+    """Internal vocabulary on a researcher's screen fails the same way a dead
+    button does: it looks like information and conveys none.
+
+     "Kind: dmp-discrepancy" named the drawer a record was filed in. The reader
+    needed "Comes from what you wrote", which says where it came from and so
+    what they can check it against.
+    """
+    client, sign_in = web
+    job_id = _job(service, researcher)
+    service.add_gate_items(job_id, [_report(), _care()])
+    sign_in(researcher)
+    body = client.get(f"/ui/jobs/{job_id}/gate").text
+      # Checked as the row that used to print them, not as bare substrings:
+      # an item's own identifier legitimately contains its kind's spelling, and
+      # a test that forbade it would forbid the id, not the label.
+    assert "<dd>dmp-discrepancy</dd>" not in body
+    assert "<dd>care-referral</dd>" not in body
+    assert "<dt>What this is</dt>" in body
+    assert "<dd>Comes from what you wrote</dd>" in body
+    assert "<dd>Something only people can answer</dd>" in body
 
 
 def test_a_redaction_shows_what_the_proposal_describes(web, service,
@@ -213,6 +288,37 @@ def test_a_redaction_shows_what_the_proposal_describes(web, service,
     assert "Would become" not in body
     assert "If edited by a person outside this tool" in body
     assert "A proposal, not a change." in body
+
+
+def _model_draft(agent="metadata"):
+    # What a model wrote, held for the only reader who can tell an
+    # invented value from a supplied one.
+    return GateItem(
+        item_id=f"llm-output:{agent}:0123456789ab",
+        kind=GateItemKind.LLM_OUTPUT,
+        summary=f"Check what {agent} wrote: the record",
+        detail=[f"written by {agent}/0.1.0; bound to what it wrote"],
+        permitted_decisions=[ItemDecision.APPROVE,
+                             ItemDecision.REQUEST_RERUN])
+
+
+def test_a_draft_is_not_called_a_proposal(web, service, researcher):
+    """The same word on two different asks invites the same shrug.
+
+    "Accept this proposal" belongs to a redaction proposal, where
+    somebody has suggested a change and the reader says whether they want
+    it. On a model's draft nothing has been suggested and there is nothing
+    to accept: the reader is asked whether the sentence is right, which is
+    the only thing they can answer and what borrowed wording lets them skip.
+    """
+    client, sign_in = web
+    job_id = _job(service, researcher)
+    service.add_gate_items(job_id, [_model_draft(), _redaction()])
+    sign_in(researcher)
+    body = client.get(f"/ui/jobs/{job_id}/gate").text
+    assert "Yes, what it wrote is right" in body
+    # The proposal keeps its own wording; only the draft's button changes.
+    assert body.count("Accept this proposal") == 1
 
 
 def test_the_evidence_is_shown_beside_the_proposal(web, service, researcher):

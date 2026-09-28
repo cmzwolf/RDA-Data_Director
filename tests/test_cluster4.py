@@ -679,6 +679,204 @@ def test_the_metadata_agent_does_not_see_the_data():
     assert "station" in model.seen[0].user_content       # column names
     assert "S14,2019" not in model.seen[0].user_content  # never values
 
+# --------------------------------------------------------------------------
+# Populated from a registry -- the second kind
+#
+# Two kinds of registry, and the metadata agent reads the second one: not the
+# shortlist that answers "where should this deposit go" (that answer is a
+# destination such as Zenodo), but the registry of standards and of what a
+# repository requires a deposit to look like (FAIRsharing, re3data). The
+# publisher shows the difference, because it names the body that will stand
+# behind the identifier: not the depositor's to invent from the material, and
+# not the model's to guess.
+# --------------------------------------------------------------------------
+
+class FakeRegistry:
+    """What a repository requires of a deposit, as a registry records it.
+
+    The shortlist shape, which is what re3data has: find returns entries that
+    already name themselves, and describe holds the rest of what the entry
+    records.
+    """
+
+    def __init__(self, entries, *, fail=False):
+        self.entries = entries
+        self.fail = fail
+        self.base_url = "https://registry.test/api/v1"
+        self.asked = []
+        self.described = []
+
+    def find_repositories(self, *, discipline=None, limit=10, **criteria):
+        self.asked.append(discipline)
+        if self.fail:
+            raise ConnectionError("registry unreachable")
+        return [{"id": e["id"], "name": e.get("name") or ""} for e in self.entries
+                if discipline and discipline.lower() in (e.get("name")
+                                                         or "").lower()][:limit]
+
+    def describe(self, repository_id):
+        self.described.append(repository_id)
+        for entry in self.entries:
+            if entry["id"] == repository_id:
+                return entry
+        return {}
+
+
+class DescribeOnlyRegistry:
+    """A registry offering nothing but the description of one entry.
+
+    The other shape a deployment's registry arrives in: a registry of standards
+    you ask about a single entry by name. The agent must cope with it without
+    assuming the shortlist call exists, which is why the lookup is read off the
+    registry rather than called on it.
+    """
+
+    def __init__(self, entry, *, fail=False):
+        self.entry = entry
+        self.fail = fail
+        self.base_url = "https://standards.test/api/v1"
+        self.described = []
+
+    def describe(self, repository_id):
+        if self.fail:
+            raise ConnectionError("standards registry unreachable")
+        self.described.append(repository_id)
+        return dict(self.entry)
+
+
+ZENODO = {"id": "10.17199/zenodo", "name": "Zenodo",
+           "subjects": ["Multidisciplinary"], "content_types": ["Data"],
+           "data_licenses": ["CC-BY-4.0"], "pid_systems": ["DOI"],
+           "policies": ["Preservation policy"]}
+
+
+def _target(name="Zenodo"):
+    return {"name": name, "identifier": None, "source": "preference"}
+
+
+def _draft_with(agent, facts=None, source=None, note=None):
+    return agent.draft(JobState(job_id="job-x", step="metadata"),
+                        profile_summary=PROFILE, registry_facts=facts,
+                        registry_source=source, registry_note=note)
+
+
+def test_the_publisher_is_the_registrys_name_for_where_the_deposit_goes():
+    """The publisher is populated, not guessed: it is the registry's own name
+    for the entry that matched the repository named on the log."""
+    registry = FakeRegistry([ZENODO])
+    agent = MetadataAgent(_pep(Scripted(DRAFT_REPLY)), FakeVocabulary({}),
+                          registry)
+    facts, note, source = agent._registry_facts(_target())
+    record, decision = _draft_with(agent, facts, source, note)
+    assert registry.asked == ["Zenodo"]              # asked for what was named
+    assert registry.described == []      # one call: the entry names itself
+    assert record.publisher == "Zenodo"
+    assert record.origin_of("publisher").origin.value == "repository-default"
+    assert decision.sources_consulted == ["https://registry.test/api/v1"]
+
+
+def test_the_registry_is_consulted_without_being_asked_of_the_model():
+    """No negotiation. The registry's fields go into the record, not into a
+    prompt inviting the model to decide what the publisher should be: a model
+    that has never heard of a repository cannot be trusted to name one, and a
+    prompt is not a provenance."""
+    model = Scripted(DRAFT_REPLY)
+    agent = MetadataAgent(_pep(model), FakeVocabulary({}), FakeRegistry([ZENODO]))
+    facts, note, source = agent._registry_facts(_target())
+    _draft_with(agent, facts, source, note)
+    request = model.seen[0]
+    assert request.trusted_instructions is None
+    assert "registry.test" not in request.user_content
+    assert "Multidisciplinary" not in request.user_content
+
+def test_a_repository_the_registry_does_not_know_supplies_no_publisher():
+    """Matching rather than trusting, the rule the repository node already
+    holds to: a name the registry does not match becomes no value and a reported
+    absence, never a plausible one. A publisher is a promise about who will stand
+    behind an identifier, so a promise nobody in the registry makes cannot be
+    made on their behalf."""
+    agent = MetadataAgent(_pep(Scripted(DRAFT_REPLY)), FakeVocabulary({}),
+                          FakeRegistry([ZENODO]))
+    facts, note, source = agent._registry_facts(_target("Figshare"))
+    assert (facts, source) == (None, None)
+    record, decision = _draft_with(agent, facts, source, note)
+    assert record.publisher is None
+    assert record.origin_of("publisher") is None
+    assert any("Figshare" in u for u in decision.undetermined)
+    assert decision.sources_consulted == []         # nothing was consulted well
+
+
+def test_an_unreachable_registry_does_not_stop_the_draft():
+    """The registry is one source among several. Losing it must not lose the
+    draft: the depositor still gets a record to read, with the publisher left
+    blank and the reason beside it rather than a job stuck at a node."""
+    agent = MetadataAgent(_pep(Scripted(DRAFT_REPLY)), FakeVocabulary({}),
+                          FakeRegistry([ZENODO], fail=True))
+    facts, note, source = agent._registry_facts(_target())
+    record, decision = _draft_with(agent, facts, source, note)
+    assert facts is None and record.publisher is None
+    assert record.title != "Untitled dataset"          # the rest was still drafted
+    assert any("ConnectionError" in u for u in decision.undetermined)
+
+
+def test_the_three_absences_are_kept_as_three_findings():
+    """No repository named on the log, no registry configured to ask, and a
+    registry asked that holds nothing are three findings calling for three
+    different next acts. Reporting an unasked question as a negative answer is
+    the failure this project keeps meeting from the other side."""
+    agent = MetadataAgent(_pep(Scripted(DRAFT_REPLY)), FakeVocabulary({}),
+                          FakeRegistry([ZENODO]))
+    no_target = agent._registry_facts(None)[1]
+    no_match = agent._registry_facts(_target("Figshare"))[1]
+    no_registry = MetadataAgent(
+        _pep(Scripted(DRAFT_REPLY)), FakeVocabulary({})
+    )._registry_facts(_target())[1]
+    assert "log names no repository" in no_target
+    assert "no entry matching" in no_match
+    assert "no standards registry is configured" in no_registry
+    assert len({no_target, no_match, no_registry}) == 3
+
+
+def test_the_registry_names_its_entry_and_that_is_the_publisher():
+    """The publisher is the registry's spelling of its own entry, not the
+    depositor's spelling of it: a DataCite publisher has to be the name under
+    which the body is known, and the registry is where that name is kept."""
+    entries = [dict(ZENODO, name="Zenodo (CERN)")]
+    agent = MetadataAgent(_pep(Scripted(DRAFT_REPLY)), FakeVocabulary({}),
+                          FakeRegistry(entries))
+    facts, note, source = agent._registry_facts(_target("zenodo"))
+    record, _ = _draft_with(agent, facts, source, note)
+    assert record.publisher == "Zenodo (CERN)"
+
+
+def test_a_registry_with_only_a_describe_call_is_still_consulted():
+    """The second kind of registry is often a standards registry you ask about
+    one entry by name, with no shortlist to search. Reading the lookup off the
+    registry rather than calling it on it by name is what lets one agent work
+    with either shape, and it is why the call is taken by getattr."""
+    agent = MetadataAgent(_pep(Scripted(DRAFT_REPLY)), FakeVocabulary({}),
+                           DescribeOnlyRegistry(dict(ZENODO, name="Zenodo")))
+    facts, note, source = agent._registry_facts(_target("zenodo"))
+    record, decision = _draft_with(agent, facts, source, note)
+    assert record.publisher == "Zenodo"
+    assert decision.sources_consulted == ["https://standards.test/api/v1"]
+
+
+def test_an_entry_that_records_no_name_supplies_no_publisher():
+    """A registry that holds an entry but records no name for it has not
+    answered this question, and filling the gap with the name from the log would
+    have the agent vouch for a publisher that nothing in the registry vouches
+    for."""
+    agent = MetadataAgent(_pep(Scripted(DRAFT_REPLY)), FakeVocabulary({}),
+                           DescribeOnlyRegistry({}))
+    facts, note, source = agent._registry_facts(_target())
+    assert (facts, source) == (None, None)
+    assert "records no name" in note
+    record, _ = _draft_with(agent, facts, source, note)
+    assert record.publisher is None
+
+
+
 
 # -- the documentation agent ----------------------------------------------
 

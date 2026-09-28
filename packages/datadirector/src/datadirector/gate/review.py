@@ -32,7 +32,7 @@ from datadirector_contracts import (
     Event, EventKind, GateItem, GateItemKind, GateState, ItemDecision,
     Resolution,
 )
-from datadirector_contracts.gate import counts_as_validation
+from datadirector_contracts.gate import review_agent_id
 
 from ..errors import ConfigurationError
 from ..gate.items import Gate
@@ -83,14 +83,26 @@ def review_item(agent, label, payloads, editable=True, edit_note="",
     the digest names that content and nothing else. `edit_note` carries why a
     person may not write their own version: an unexplained missing button
     reads as an oversight rather than as a decision.
+
+    `editable` decides which buttons appear, not only what the prose explains.
+    Offering `edited` for an output nobody can write their own version of -- a
+    sensitivity view, which the projection only ever tightens -- offers a
+    decision whose sole effect is to settle the item, and settling it is what
+    matters: `counts_as_validation` is true of `EDITED`, so whoever pressed it
+    would have stood behind a version they never wrote and let every agent
+    behind it run. A button that cannot do what it says is not a harmless extra
+    option; it is a rubber stamp left on the counter.
     """
     digest = digest_of(payloads)
     name = agent.split("/")[0]
     lines = list(detail or [])
     lines.append("written by {}; this item is bound to what it wrote ({}), "
                  "not to whatever the field holds later".format(agent, digest))
-    lines.append("nothing downstream reads this until you validate it, edit "
-                 "it, or ask for another attempt")
+    lines.append("nothing downstream reads this until you "
+                   + ("validate it, edit it, or ask for another attempt"
+                      if editable else
+                      "validate it, or ask for another attempt saying what is "
+                      "wrong with it"))
     if not editable and edit_note:
         lines.append(edit_note)
     return GateItem(
@@ -98,15 +110,13 @@ def review_item(agent, label, payloads, editable=True, edit_note="",
         kind=GateItemKind.LLM_OUTPUT,
         summary="Check what {} wrote: {}".format(name, label),
         detail=lines,
-        permitted_decisions=list(REVIEW_DECISIONS))
+        permitted_decisions=[d for d in REVIEW_DECISIONS
+                              if editable or d is not ItemDecision.EDITED])
 
 
 def agent_of(item_id):
     """The agent named in a review item's identifier."""
-    if not item_id.startswith(ITEM_PREFIX + ":"):
-        return None
-    parts = item_id.split(":")
-    return parts[1] if len(parts) > 1 else None
+    return review_agent_id(item_id)
 
 
 
@@ -141,15 +151,12 @@ def pending(events):
     Folded from the log rather than kept beside it, so a restarted process
     still refuses to run the agent that was waiting. A request for another
     attempt is not in here: the draft it refers to is still unvalidated, which
-    is exactly why the workflow stays stopped.
+    is exactly why the workflow stays stopped. A draft that a later draft has
+    replaced is not here either -- the validated replacement is what downstream
+    reads, so the superseded one no longer holds the workflow. Both rules come
+    from `GateState.unresolved`, the one place that decides what is still open.
     """
-    validated = set()
-    for resolution in review_resolutions(events):
-        if counts_as_validation(resolution.decision):
-            validated.add(resolution.item_id)
-    return [item for item in log_items(events)
-            if item.kind is GateItemKind.LLM_OUTPUT
-            and item.item_id not in validated]
+    return review_gate(events).unresolved()
 
 
 def pending_agents(events):

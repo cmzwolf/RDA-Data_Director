@@ -84,6 +84,25 @@ class ItemDecision(StrEnum):
     NOT_APPLICABLE = "not-applicable"
     """A person determined the referral does not apply to this material."""
 
+    ACKNOWLEDGE = "acknowledge"
+    """A person has read a report; the tool is not asking them to decide.
+
+    Every other decision here changes something: an approval validates a draft,
+    an exclusion takes a file out of the deposit. This one is for the items that
+    are reports rather than questions, where a yes/no pair would be an
+    invention — an item asking whether to deposit somewhere, when nothing
+    downstream reads the answer and the destination is settled later by a
+    different step, offers a vote that decides nothing. An item that carries no
+    consequence should ask to be read, not for a verdict.
+
+    Deliberately absent from `NON_VALIDATING_DECISIONS`: reading is not a
+    request for another attempt, so the item does settle, and a job is not held
+    open forever waiting on somebody to click past a notice. It is also never
+    offered for a model's draft (`llm-output`), where attesting to content
+    without writing anything would be precisely the rubber stamp that flag was
+    added to prevent.
+    """
+
     INSPECTED_EXTERNALLY = "inspected-externally"
     PUBLISH_AS_IS = "publish-as-is"
     EXCLUDE_FROM_DEPOSIT = "exclude-from-deposit"
@@ -119,6 +138,37 @@ that stays open keeps the workflow behind it."""
 def counts_as_validation(decision: ItemDecision) -> bool:
     """Whether this decision is a person standing behind the output."""
     return decision not in NON_VALIDATING_DECISIONS
+
+
+def review_agent(item: "GateItem") -> str | None:
+    """The agent whose model output a review item is bound to, from its id.
+
+    A review item is identified ``llm-output:<agent>:<digest>``, so the agent
+    segment groups the several drafts one agent has written. Returns nothing
+    for an item that is not a model draft, since superseding makes no sense
+    for a redaction proposal or a plan discrepancy: those are findings, not
+    successive attempts at the same sentence.
+    """
+    if item.kind is not GateItemKind.LLM_OUTPUT:
+        return None
+    return review_agent_id(item.item_id)
+
+
+def review_agent_id(item_id: str) -> str | None:
+    """The agent segment of a model-draft item's id, or nothing.
+
+    A review item is identified ``llm-output:<agent>:<digest>``, so the agent
+    segment groups the several drafts one agent has written. Returns nothing for
+    an id that is not a model draft, since superseding makes no sense for a
+    redaction proposal or a plan discrepancy: those are findings, not successive
+    attempts at the same sentence. The orchestrator's ``agent_of`` reads through
+    this, so the identifier shape has one owner rather than a copy in each
+    package that could drift on its own.
+    """
+    parts = item_id.split(":")
+    if len(parts) < 3 or parts[0] != GateItemKind.LLM_OUTPUT.value:
+        return None
+    return parts[1] or None
 
 
 class RedactionProposal(BaseModel):
@@ -189,8 +239,44 @@ class GateState(BaseModel):
                 if counts_as_validation(r.decision)}
 
     @property
+    def superseded_ids(self) -> set[str]:
+        """Drafts that a later draft from the same agent has replaced.
+
+        Asking an agent to write again deliberately leaves the item on the
+        draft being replaced open -- it must not flow downstream unseen while
+        the second attempt is produced. That rule is right at the moment of
+        the request and wrong forever after: once a person has validated a
+        LATER draft from that agent, the thing they stood behind is the newest
+        one, and the newest one is what every reader and the deposit read
+        (`latest_drafted_record` returns the latest and only the latest). The
+        superseded draft can no longer reach a deposit, so an unvalidated item
+        on it must not keep the workflow, and the person, waiting on prose
+        nobody will ever publish.
+
+        The replacement releases the earlier draft, and only the replacement:
+        a draft nobody has written again stays open, exactly as before. The
+        rule lives here rather than beside the request-rerun path so every
+        reader -- the workflow, the deposit check, the screen -- agrees on
+        which items are still waiting, as `resolved_ids` already does.
+        """
+        latest = {}     # agent -> position of the newest validated draft
+        for position, item in enumerate(self.items):
+            agent = review_agent(item)
+            if agent is not None and item.item_id in self.resolved_ids:
+                latest[agent] = max(latest.get(agent, -1), position)
+        superseded = set()
+        for position, item in enumerate(self.items):
+            agent = review_agent(item)
+            if agent is None or item.item_id in self.resolved_ids:
+                continue
+            if position < latest.get(agent, -1):
+                superseded.add(item.item_id)
+        return superseded
+
+    @property
     def unresolved(self) -> list[GateItem]:
-        return [i for i in self.items if i.item_id not in self.resolved_ids]
+        settled = self.resolved_ids | self.superseded_ids
+        return [i for i in self.items if i.item_id not in settled]
 
     @property
     def blocks_deposit(self) -> bool:

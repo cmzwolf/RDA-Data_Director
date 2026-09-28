@@ -128,10 +128,30 @@ def test_a_repository_the_registry_does_not_know_is_flagged_as_such():
                for d in item.detail)
 
 
-def test_confirmation_offers_only_yes_or_no():
+def test_a_report_offers_to_be_read_not_decided():
+    """Nothing downstream reads an approval of this item, so it must not ask
+    for one.
+
+    The item used to offer `approve` and `reject` under the heading "Deposit to
+    Zenodo?", which reads as authorising a deposit. No code path branches on
+    either answer: the destination is settled later, when the repository step
+    puts the candidates in front of the depositor and records the one they
+    pick. A button whose answer nothing reads is not a convenience but a false
+    affordance, and it left someone who meant "that is not what I said" holding
+    a button that meant neither yes nor no.
+    """
     item = confirmation_item(RepositoryPreference(named="EUDAT"), [])
-    assert {d for d in item.permitted_decisions} == {ItemDecision.APPROVE,
-                                                     ItemDecision.REJECT}
+    assert item.permitted_decisions == [ItemDecision.ACKNOWLEDGE]
+
+
+def test_reading_a_report_says_what_it_does_not_do():
+    # The item has to say what it is not, or an acknowledgement is mistaken for
+    # a booking: whoever "accepted" the old wording expected a deposit to
+    # follow and found the workflow still asking where to publish.
+    item = confirmation_item(RepositoryPreference(named="EUDAT"), [])
+    assert any("It decides nothing and books nothing" in d
+               for d in item.detail)
+    assert "Deposit to EUDAT?" not in item.summary
 
 
 # -- divergence from the plan ----------------------------------------------

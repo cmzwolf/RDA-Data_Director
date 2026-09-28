@@ -19,7 +19,9 @@ import tempfile
 from pathlib import Path
 from typing import Callable
 
-from datadirector_contracts import AccessRole, EventKind, ItemDecision, Orcid
+from datadirector_contracts import (
+    AccessRole, EventKind, GateItemKind, ItemDecision, Orcid,
+)
 from fastapi import (
     Depends, FastAPI, File, Form, HTTPException, Request, UploadFile,
 )
@@ -70,6 +72,27 @@ DECISION_LABELS = {
     ItemDecision.EDITED: "I have written my own version of it",
     ItemDecision.REQUEST_RERUN: "Ask it to write again (this draft stays "
                                    "unvalidated)",
+     # Offered only where an item reports something rather than asks something,
+      # and the alternatives would have been buttons that change nothing. The
+      # label says what the click means, because someone who reaches a gate
+      # screen expects to decide something and would otherwise look for the
+      # consequence of an acknowledgement and not find one.
+    ItemDecision.ACKNOWLEDGE: "I have read this",
+}
+
+# What a reader calls an item's kind, not what the schema calls it. The
+# template printed `dmp-discrepancy` and `llm-output` on a researcher's screen:
+# the system's own vocabulary shown to the one person it is supposed to speak
+# plainly to, naming the drawer a record was filed in rather than what is being
+# put to them.
+KIND_LABELS = {
+    GateItemKind.CARE_REFERRAL: "Something only people can answer",
+    GateItemKind.UNINSPECTED_FILE: "A file nobody has looked at",
+    GateItemKind.REDACTION_PROPOSAL: "Suggests hiding something from the "
+                                      "published copy",
+    GateItemKind.DECLARATION_DISCREPANCY: "Does not match what you declared",
+    GateItemKind.DMP_DISCREPANCY: "Comes from what you wrote",
+    GateItemKind.LLM_OUTPUT: "Written by a model, not by a person",
 }
 
 PRESUMPTION_MARKERS = ("not inspected", "presumed", "presumption")
@@ -366,8 +389,12 @@ def build_web(app: FastAPI, service: JobService, *, pipeline=None,
             dmp_reference=dmp.strip() or None,
             instruction=instruction.strip() or None,
             preference=_preference_from(residency, backend))
-        for item in result.gate_items:
-            pipeline.runtime.store.append(_gate_event(result.job_id, [item]))
+          # Nothing to record here: `ingest` already appended the items it raised,
+          # on the orchestrator's behalf, so that they survive the request. This
+          # route used to append them a second time under its own agent, and the
+          # gate -- which reads the log, not a field beside it -- then showed the
+          # researcher the same item twice. One writer per item, always the
+          # orchestrator.
 
         # Straight to the second screen. Nothing can read the data until the
         # researcher has said what it is, so sending them to the job page would
@@ -839,15 +866,35 @@ def _item_view(item, resolution) -> dict:
     presumption = any(marker in lowered for marker in PRESUMPTION_MARKERS)
     reason_required = [d.value for d in item.permitted_decisions
                        if d in REASON_REQUIRED]
+    labels = dict(DECISION_LABELS)
+    if item.kind is GateItemKind.LLM_OUTPUT:
+        # "Accept this proposal" is the wording of a redaction proposal, where
+        # there is a proposal: somebody has suggested a change and the reader
+        # says whether it is the one they want. On a model's draft there is no
+        # proposal and nothing to accept; what is being asked is whether the
+        # sentence is right, which is a different question and the only one the
+        # reader can answer. Borrowed wording turns a check into a shrug.
+        labels[ItemDecision.APPROVE] = "Yes, what it wrote is right"
     return {
         "item_id": item.item_id,
         "slug": re.sub(r"[^a-z0-9]+", "-", item.item_id.lower()).strip("-"),
         "kind": item.kind.value,
+        "kind_label": KIND_LABELS.get(item.kind, item.kind.value),
         "artefact": item.artefact,
         "summary": _display_summary(item),
         "detail": detail,
         "permitted_decisions": [d.value for d in item.permitted_decisions],
-        "decision_labels": {d.value: DECISION_LABELS.get(d, d.value)
+           # A radio group is for choosing between outcomes. Where one answer is
+           # offered there is nothing to choose, and drawing the choice anyway
+           # tells the reader their click carries a consequence it does not: the
+           # screen renders a single labelled button instead.
+        "single_decision": (len(item.permitted_decisions) == 1
+            and not reason_required),
+            # The reason box is drawn only by the multi-answer branch, so an
+            # answer that demands a reason is never rendered as the single
+            # button: that would offer a response the domain layer refuses,
+            # and the item could not be settled from the screen at all.
+        "decision_labels": {d.value: labels.get(d, d.value)
                             for d in item.permitted_decisions},
         "reason_required": [REASON_REQUIRED[ItemDecision(d)]
                             for d in reason_required],

@@ -26,6 +26,7 @@ from datadirector_contracts import (
 )
 
 from .gate.items import Gate
+from .repository_choice import PREFERENCE_ITEM_PREFIX
 
 from .state.projection import JobState, fold
 
@@ -68,9 +69,28 @@ def log_items(events) -> list[GateItem]:
         if payload.get("marker") == "gate.items-added":
             items.extend(GateItem.model_validate(raw)
                         for raw in payload.get("items", []))
-    return items
+    return unique_items(items)
 
 
+def unique_items(items: list[GateItem]) -> list[GateItem]:
+    """One item per identifier, in the order each first appeared.
+
+    The log is append-only and items are raised by the orchestrator, so the
+    same item should never reach it twice. But an item that *was* raised
+    twice -- by a route that appended a second copy under its own agent, say
+    -- is a copy a reader must not show twice: a reviewer asked to decide the
+    same thing twice learns that the gate is noise, and a gate that reads as
+    noise is a gate that gets clicked through. Collapsing here, at the fold,
+    rather than in the screen means every reader of the log agrees.
+    """
+    seen: set[str] = set()
+    unique: list[GateItem] = []
+    for item in items:
+        if item.item_id in seen:
+            continue
+        seen.add(item.item_id)
+        unique.append(item)
+    return unique
 def job_status(events) -> JobStatus:
     """The gate's current state, read from the log alone.
 
@@ -207,6 +227,34 @@ def recorded_profile(events) -> dict:
     return {}
 
 
+def target_repository(events) -> dict | None:
+    """The repository this job is headed for, as the log already names it.
+
+    Folded from the log rather than asked again. Two events can name the
+    destination, in order of how much they are worth: the depositor's
+    confirmed selection at the repository node, and, before that exists, the
+    preference the gate asked them to confirm. The selection wins because it
+    is a human act that names them; the preference is a reading of an
+    instruction, and remains unconfirmed until someone approves it.
+
+    None means the log names no repository. That is not the same finding as a
+    registry holding no such repository, and a caller that reports the second
+    when it meant the first has answered a question it never asked.
+     """
+    for event in reversed(events):
+        if event.kind is EventKind.REPOSITORY_SELECTED:
+            name = event.payload.get("repository")
+            if name:
+                return {"name": str(name),
+                         "identifier": event.payload.get("identifier"),
+                         "source": "selected"}
+    for item in reversed(log_items(events)):
+        if item.item_id.startswith(PREFERENCE_ITEM_PREFIX):
+            return {"name": item.item_id[len(PREFERENCE_ITEM_PREFIX):],
+                     "identifier": None, "source": "preference"}
+    return None
+
+
 def record_summary(record) -> dict:
     """The drafted record, as much of it as a drafting prompt should carry.
 
@@ -270,7 +318,7 @@ def build_gate(events):
                 decided_by=event.human,
                 reason=event.payload.get("reason"),
                 decided_at=event.occurred_at))
-    return Gate(GateState(items=items, resolutions=resolutions))
+    return Gate(GateState(items=unique_items(items), resolutions=resolutions))
 
 class JobHandle:
     """A narrowed way onto one job, built by the orchestrator before each

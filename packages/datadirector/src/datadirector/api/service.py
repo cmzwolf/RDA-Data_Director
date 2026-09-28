@@ -24,7 +24,7 @@ from datadirector_contracts import (
 
 from ..errors import AuthorityError
 from ..gate.items import Gate, artefacts_to_upload
-from ..job_handle import latest_drafted_record
+from ..job_handle import latest_drafted_record, unique_items
 from ..state.projection import JobState, fold
 from ..state.store import EventStore
 
@@ -110,7 +110,8 @@ class JobService:
                     decided_by=event.human,
                     reason=event.payload.get("reason"),
                     decided_at=event.occurred_at))
-        return Gate(GateState(items=items, resolutions=resolutions))
+        return Gate(GateState(items=unique_items(items),
+                              resolutions=resolutions))
 
     def resolve(self, job_id: str, item_id: str, decision: ItemDecision, *,
                 human: Orcid, reason: str | None = None) -> Resolution:

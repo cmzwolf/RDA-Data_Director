@@ -25,7 +25,8 @@ from datadirector_contracts import (
     Rights, SensitivityClass, Subject,
 )
 
-from ..job_handle import recorded_profile
+from ..job_handle import recorded_profile, target_repository
+from ..repository_choice import same_name
 from ..state.projection import JobState
 
 SYSTEM_PROMPT = """\
@@ -81,15 +82,23 @@ class MetadataAgent(Agent):
     def identity(self) -> str:
         return f"{self.name}/{self.version}"
 
-    def __init__(self, pep, vocabulary=None) -> None:
+    def __init__(self, pep, vocabulary=None, registry=None) -> None:
         self._pep = pep
         self._vocabulary = vocabulary
+         # A registry of the second kind: standards, and what a repository
+         # requires a deposit to look like. Deliberately not the shortlist
+         # driver, which answers "where should this be deposited" with an
+         # answer that is a destination rather than a standard.
+        self._registry = registry
 
 
     def draft(self, state: JobState, *, profile_summary: dict,
               stated: dict | None = None,
               creators: list[Creator] | None = None,
-              rights: Rights | None = None
+              rights: Rights | None = None,
+              registry_facts: dict | None = None,
+              registry_source: str | None = None,
+              registry_note: str | None = None
               ) -> tuple[CanonicalRecord, DecisionRecord]:
         classification = (state.classification.level if state.classification
                           else SensitivityClass.SENSITIVE)
@@ -150,10 +159,25 @@ class MetadataAgent(Agent):
                 origin=FieldOrigin.ABSENT_BY_DESIGN,
                 decision_ref=self.identity)
 
+         # The publisher is the one field a depositor cannot supply from the
+          # material and a model must not guess, because it names the body that
+          # will stand behind the identifier. It is the repository the deposit is
+          # going to, and that is exactly what a registry of the second kind
+          # records -- so it is taken from the registry's own name for the entry
+          # that matched the repository on the log. Matching rather than
+          # trusting: a name the registry does not know yields no publisher and a
+          # reported absence, never a plausible one.
+        publisher = (registry_facts or {}).get("name") or None
+        if publisher:
+            provenance["publisher"] = FieldProvenance(
+                field_path="publisher", origin=FieldOrigin.REPOSITORY_DEFAULT,
+                decision_ref=self.identity)
+
         record = CanonicalRecord(
             title=title or "Untitled dataset",
             creators=list(creators or []),
             publication_year=date.today().year,
+            publisher=publisher,
             resource_type=resource_type,
             descriptions=descriptions,
             subjects=subjects,
@@ -163,6 +187,12 @@ class MetadataAgent(Agent):
         )
 
         undetermined = [str(u) for u in (data.get("uncertain") or [])][:8]
+        if registry_note:
+             # Why the publisher is blank belongs with the blank. "The registry
+             # was not configured", "the registry is unreachable" and "the
+             # registry holds no such repository" are three different findings,
+             # and only the last one suggests the depositor named the wrong place.
+            undetermined.append(registry_note)
         if not (stated or {}):
             # The blank field the researcher is about to see has a reason, and
             # the reason is that nothing was ever said. Saying so here is what
@@ -192,10 +222,83 @@ class MetadataAgent(Agent):
                 "left absent and reported rather than guessed"
             ),
             undetermined=undetermined,
+            sources_consulted=([registry_source] if registry_source else []),
             model_used=response.model_id,
             input_digest=response.input_digest,
         )
         return record, decision
+
+    def _registry_facts(self, target: dict | None):
+        """What the standards registry says about where this job is headed.
+
+        Returns ``(facts, note, source)``. ``facts`` carries what the registry
+        recorded for the entry that matched, as far as the single lookup it
+        took recorded it; ``note`` says why there is none; ``source`` names the
+        registry consulted, for the decision record. Facts and note are
+        mutually exclusive by construction, so a caller cannot report a value
+        and an absence for the same lookup.
+
+        Absences are kept apart deliberately, because they mean different things
+        to the person reading the gate: no repository named on the log is not the
+        finding that a registry holds no such repository, and neither is the
+        finding that the deployment configured no registry to ask. Reporting an
+        unasked question as a negative answer is the failure this project keeps
+        meeting from the other side.
+
+        Nothing here is invented to fill a gap. The registry's name for its own
+        entry becomes the publisher; a registry that returns no name for it does
+        not get one.
+        """
+        if target is None:
+            return None, ("publisher: the log names no repository yet, so no "
+                            "registry was asked what it requires"), None
+        registry = self._registry
+        name = target["name"]
+        if registry is None:
+            return None, (f"publisher: {name!r} is named on the log, but no "
+                            "standards registry is configured for this "
+                            "deployment, so it was left for the depositor"), None
+        find = getattr(registry, "find_repositories", None)
+        describe = getattr(registry, "describe", None)
+        if find is None and describe is None:
+            return None, (f"publisher: the configured registry offers no lookup, "
+                           f"so what {name!r} requires could not be read from "
+                            "it"), None
+        try:
+            entry = None
+            if find is not None:
+                matched = [found for found in (find(discipline=name, limit=5) or
+                                                 [])
+                           if same_name(name, found.get("name")
+                                        or found.get("id"))]
+                if not matched:
+                    return None, (f"publisher: the registry was consulted and "
+                                   f"holds no entry matching {name!r}"), None
+                entry = matched[0]
+                  # One lookup is enough when the shortlist already names its own
+                  # entry. A second call costs the depositor another timeout to
+                  # learn what the record would not use, so it is made only when
+                  # the first answer holds no name.
+                if describe is not None and not entry.get("name"):
+                    entry = describe(entry.get("id") or name) or {}
+            else:
+                entry = describe(target.get("identifier") or name) or {}
+        except Exception as exc:
+            return None, (f"publisher: the registry could not be reached "
+                           f"({type(exc).__name__}), so it is not known what "
+                           f"{name!r} requires of a deposit"), None
+        recorded = entry.get("name")
+        if not recorded:
+            return None, (f"publisher: the registry holds an entry for {name!r} "
+                           "but records no name for it, so no publisher was "
+                            "taken"), None
+        return ({"name": str(recorded),
+                   "subjects": list(entry.get("subjects") or []),
+                   "content_types": list(entry.get("content_types") or []),
+                   "data_licenses": list(entry.get("data_licenses") or []),
+                   "pid_systems": list(entry.get("pid_systems") or []),
+                   "policies": list(entry.get("policies") or [])},
+                None, getattr(registry, "base_url", None))
 
     def _suggestions_for(self, keyword: str) -> list[str]:
         """Near candidates, so an ungrounded term is actionable.
@@ -260,7 +363,7 @@ class MetadataAgent(Agent):
 
     @classmethod
     def build(cls, context: AgentContext) -> "MetadataAgent":
-        return cls(context.pep, context.vocabulary)
+        return cls(context.pep, context.vocabulary, context.standards_registry)
     @classmethod
     def capabilities(cls) -> Capabilities:
         return Capabilities(
@@ -294,9 +397,18 @@ class MetadataAgent(Agent):
         state = handle.state
         events_log = handle.events()
         stated = handle.depositor_context()
+         # One registry lookup per draft, for the repository the log already
+          # names. What the registry returned is recorded as a reference -- the
+          # name asked, the base URL asked, whether anything matched -- rather
+          # than as the blob itself: a payload that pastes in a registry's whole
+          # record is a second copy of the truth, and a bigger one than the
+          # depositor can check.
+        target = target_repository(events_log)
+        facts, registry_note, registry_source = self._registry_facts(target)
         record, decision = self.draft(
             state, profile_summary=recorded_profile(events_log),
-            stated=stated)
+            stated=stated, registry_facts=facts,
+            registry_source=registry_source, registry_note=registry_note)
         return Outcome(
             job_id=handle.job_id,
             events=[self.event(
@@ -305,7 +417,12 @@ class MetadataAgent(Agent):
                           "ungrounded": [s.term
                                          for s in
                                          record.ungrounded_subjects()],
-                          "drafted_from": sorted(stated)})],
+                          "drafted_from": sorted(stated),
+                           "registry": {
+                               "asked": (target or {}).get("name"),
+                               "from": (target or {}).get("source"),
+                               "base_url": registry_source,
+                               "matched": facts is not None}})],
             decision=decision, result=record,
             message="drafted the canonical record")
 

@@ -194,6 +194,7 @@ class Runtime:
             pep=self.pep, working_root=self.working_root, store=self.store,
             recorder=self.recorder, ledger=self.ledger,
             vocabulary=self.vocabulary, re3data=self.registry,
+            standards_registry=self.registry,
             repository_driver=self.repository,
             repository_name=self.repository_name,
             schema_profile=self.schema_profile, profiles=self.profiles,

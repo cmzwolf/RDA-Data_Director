@@ -57,6 +57,17 @@ Return ONLY a JSON object:
 """
 
 
+PREFERENCE_ITEM_PREFIX = "repository-preference:"
+"""The prefix of the gate item asking the depositor to confirm the repository
+they were read as having asked for.
+
+Written once, here, because the metadata agent folds the log looking for this
+very item to find where the job is headed. A second hardcoded copy is a second
+place to get the spelling wrong, and a prefix that silently stops matching does
+not look like a typo -- it looks like nobody named a repository.
+"""
+
+
 class RepositoryPreference(BaseModel):
     """What the depositor appears to have asked for."""
 
@@ -157,12 +168,26 @@ def confirmation_item(preference: RepositoryPreference,
             f"the registry was consulted and holds no repository called "
             f"{preference.named!r}. It may be spelled differently, or it may "
             "not have been what you meant.")
+     # The summary used to ask "Deposit to Zenodo?" with approve and refuse
+      # offered beneath it. No code path reads either answer: the repository
+      # step runs later, puts the candidates in front of the depositor, and
+      # records the one they pick. A yes/no pair on a report therefore offers a
+      # vote that decides nothing, and leaves someone who wants to say "that is
+      # not what I meant" holding a button that means neither yes nor no. What
+      # is owed here is the reading, shown back verbatim, and a record that it
+      # was read.
+    detail.append(
+         "This says what was understood from your instruction. It decides "
+         "nothing and books nothing: the deposit goes nowhere until you have "
+         "been shown the candidate repositories and chosen one yourself.")
+
     return GateItem(
-        item_id=f"repository-preference:{preference.named}",
+        item_id=f"{PREFERENCE_ITEM_PREFIX}{preference.named}",
         kind=GateItemKind.DMP_DISCREPANCY,
-        summary=f"Deposit to {preference.named}?",
+        summary=(f"Read from what you wrote: publish to {preference.named}. "
+                  "Nothing has been chosen yet."),
         detail=detail,
-        permitted_decisions=[ItemDecision.APPROVE, ItemDecision.REJECT])
+        permitted_decisions=[ItemDecision.ACKNOWLEDGE])
 
 
 def divergence_item(instructed: RepositoryPreference,
@@ -174,7 +199,7 @@ def divergence_item(instructed: RepositoryPreference,
     to diverge. Flagged for the same reason every other plan discrepancy is
     flagged, and enforced for none of them.
     """
-    if _same(instructed.named, committed.named):
+    if same_name(instructed.named, committed.named):
         return None
     return GateItem(
         item_id=f"repository-divergence:{instructed.named}",
@@ -187,10 +212,17 @@ def divergence_item(instructed: RepositoryPreference,
             "If the change is deliberate, your funder may expect the plan to be "
             "updated.",
         ],
-        permitted_decisions=[ItemDecision.APPROVE, ItemDecision.REJECT])
+        permitted_decisions=[ItemDecision.ACKNOWLEDGE])
 
 
-def _same(left: str | None, right: str | None) -> bool:
+def same_name(left: str | None, right: str | None) -> bool:
+    """Whether two strings name the same repository.
+
+    Public because the metadata agent resolves a logged repository name against
+    a registry and must not invent its own second notion of "the same place".
+    Two spellings of one repository is a registry consulted and a value lost;
+    two repositories read as one is a record populated from the wrong entry.
+    """
     def normalise(value: str | None) -> str:
         return re.sub(r"[^a-z0-9]", "", (value or "").lower())
     a, b = normalise(left), normalise(right)
@@ -204,7 +236,7 @@ def _match(named: str | None, candidates: list) -> str | None:
     nothing, so a hallucinated repository cannot become an endpoint.
     """
     for candidate in candidates or []:
-        if _same(named, getattr(candidate, "name", None)):
+        if same_name(named, getattr(candidate, "name", None)):
             return candidate.name
     return None
 

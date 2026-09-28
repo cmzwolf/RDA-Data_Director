@@ -163,6 +163,19 @@ class Gate:
                 f"{decision.value!r} is not available for {item_id!r}; "
                 f"permitted: {[d.value for d in item.permitted_decisions]}"
             )
+         # Reading is not attesting. A model's draft is held at the gate because
+         # the stages behind it cannot tell an invented value from a supplied
+         # one, and an item settled by "I have read this" would let every one of
+         # them run on exactly that distinction being blurred. So the answer is
+         # refused on the kind of item where the person is the only check,
+         # whatever a caller's form claims to offer.
+        if (decision is ItemDecision.ACKNOWLEDGE
+                and item.kind is GateItemKind.LLM_OUTPUT):
+            raise AuthorityError(
+                f"{item_id!r} holds what a model wrote, and having read it is "
+                    "not a judgement about it: approve it, write your own "
+                    "version, or say what is wrong and ask for another attempt."
+                 )
         if decision is ItemDecision.CONSULTED and not (reason or "").strip():
             # Who was consulted is the substance of the decision; without it the
             # record says only that someone clicked past a referral.

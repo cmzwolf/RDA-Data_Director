@@ -41,7 +41,7 @@
 
 
   <dl>
-    <dt>Kind</dt><dd>{{ item.kind }}</dd>
+    <dt>What this is</dt><dd>{{ item.kind_label }}</dd>
     {% if item.artefact %}<dt>File</dt><dd>{{ item.artefact }}</dd>{% endif %}
   </dl>
 
@@ -91,15 +91,28 @@
 
   {% if item.resolved %}
     <p class="decided">
-      Decided: <strong>{{ item.decision }}</strong> by {{ item.resolved_by }}.
+      Decided: <strong>{{ item.decision_labels.get(item.decision, item.decision) }}</strong> by {{ item.resolved_by }}.
     </p>
   {% else %}
   <form method="post"
         action="/ui/jobs/{{ job_id }}/gate/{{ item.item_id | urlencode }}"
         class="decide">
-    <fieldset>
-      <legend>Your decision</legend>
-      {# No option is pre-selected. A default is a decision the interface made. #}
+  {# One answer is not a choice. A radio group of one still reads as an
+     option to be weighed, and an item that only reports something asks to
+     be read, not judged: offering a verdict on it, when no code path reads
+     the verdict, leaves a reader believing they have made something
+     happen. Acknowledging is the only honest answer here, so it is the only
+     one offered, as one button doing exactly what the button says. #}
+  {% if item.single_decision %}
+    <input type="hidden" name="decision"
+           value="{{ item.permitted_decisions[0] }}">
+    <button type="submit" class="acknowledge">{{
+      item.decision_labels.get(item.permitted_decisions[0],
+                               item.permitted_decisions[0]) }}</button>
+  {% else %}
+  <fieldset>
+    <legend>Your decision</legend>
+    {# No option is pre-selected. A default is a decision the interface made. #}
       {% for decision in item.permitted_decisions %}
       <div class="choice">
         <input type="radio" id="d-{{ loop.index0 }}-{{ item.slug }}"
@@ -128,7 +141,8 @@
                 aria-describedby="hint-{{ item.slug }}"></textarea>
     </div>
 
-    <button type="submit">Record decision</button>
+      <button type="submit">Record decision</button>
+  {% endif %}
   </form>
   {% endif %}
 </article>
